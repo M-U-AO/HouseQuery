@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+
+data/app.db
+data/app.db-*
+data/raw/
+
+# Local private deployment keys.
+.secrets/
+*.pem

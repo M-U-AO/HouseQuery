@@ -1,0 +1,16 @@
+[Unit]
+Description=Beijing presale inventory tracker
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/bj-presale-tracker
+EnvironmentFile=/opt/bj-presale-tracker/.env
+ExecStart=/opt/bj-presale-tracker/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

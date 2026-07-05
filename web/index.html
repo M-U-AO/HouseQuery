@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>石景山期房余量查询</title>
+    <link rel="stylesheet" href="/static/styles.css?v=13" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>石景山期房余量查询</h1>
+          <p id="snapshotText">本次刷新数据已加载</p>
+        </div>
+        <div class="topbar-actions">
+          <a class="official-link topbar-link" id="officialEntryLink" href="#" target="_blank" rel="noopener noreferrer">住建委入口</a>
+          <div class="refresh-state" id="refreshState">上次刷新 09:12</div>
+          <button class="primary-button" id="refreshButton" type="button">
+            <span class="refresh-icon" aria-hidden="true"></span>
+            刷新
+          </button>
+        </div>
+      </header>
+
+      <main class="dashboard home-dashboard">
+        <section class="workspace">
+          <section class="summary-strip" aria-label="总览统计">
+            <div class="metric">
+              <span>预售项目</span>
+              <strong id="metricProjects">17</strong>
+            </div>
+            <div class="metric">
+              <span>楼栋</span>
+              <strong id="metricBuildings">68</strong>
+            </div>
+            <div class="metric status-sale">
+              <span>可售</span>
+              <strong id="metricAvailable">312</strong>
+            </div>
+            <div class="metric">
+              <span>本次变化</span>
+              <strong id="metricChanges">9</strong>
+            </div>
+            <div class="metric">
+              <span>新增项目</span>
+              <strong id="metricNew">0</strong>
+            </div>
+          </section>
+
+          <section class="home-view" id="homeView">
+            <section class="section-band group-board lower-board">
+              <div class="section-title-row compact">
+                <h2>项目组总览</h2>
+                <span id="groupCount">6 个项目组</span>
+              </div>
+              <div class="group-list home-group-list" id="groupList"></div>
+            </section>
+
+            <section class="section-band change-overview-panel">
+              <div class="section-title-row compact">
+                <h2>变化总览</h2>
+                <span id="homeChangeCompareText">对比上次刷新</span>
+              </div>
+
+              <section class="change-overview-section daily-panel">
+                <div class="section-title-row compact">
+                  <h2>本次各小区变化</h2>
+                  <span>成交数量与状态变化</span>
+                </div>
+                <div class="daily-grid" id="dailyGrid"></div>
+              </section>
+
+              <section class="home-grid change-overview-grid">
+                <section class="change-overview-section trend-panel">
+                  <div class="section-title-row compact">
+                    <h2>变化趋势</h2>
+                    <span>最近 7 次刷新</span>
+                  </div>
+                  <div class="trend-chart" id="trendChart" aria-label="变化趋势图"></div>
+                </section>
+
+                <section class="change-overview-section changes-panel">
+                  <div class="section-title-row compact">
+                    <h2>最近变化</h2>
+                    <span>本次刷新变化明细</span>
+                  </div>
+                  <div class="change-list" id="homeChangeList"></div>
+                </section>
+              </section>
+            </section>
+          </section>
+
+          <section class="detail-view is-hidden" id="detailView">
+            <section class="section-band group-detail-shell">
+              <header class="detail-header">
+                <button class="ghost-button" id="backButton" type="button">返回总览</button>
+                <div>
+                  <h2 id="activeGroupName">中海瑞文里</h2>
+                  <p id="activeGroupMeta">7 条预售项目 · 北京鑫安兴业</p>
+                </div>
+              </header>
+
+              <section class="group-section changes-panel detail-changes-panel">
+                <div class="section-title-row compact">
+                  <h2>本次变化</h2>
+                  <span id="changeCompareText">对比上次刷新</span>
+                </div>
+                <div class="change-list change-tree" id="changeList"></div>
+              </section>
+
+              <section class="group-section group-overview">
+                <div class="section-title-row">
+                  <div>
+                    <h2>总体情况</h2>
+                    <p>当前项目组房源状态汇总</p>
+                  </div>
+                  <div class="legend" aria-label="房源状态图例">
+                    <span><i style="--swatch:#CCCCCC"></i>不可售</span>
+                    <span><i style="--swatch:#33CC00"></i>可售</span>
+                    <span><i style="--swatch:#FFCC99"></i>已预订</span>
+                    <span><i style="--swatch:#FF0000"></i>已签约</span>
+                    <span><i style="--swatch:#ffff00"></i>抵押</span>
+                    <span><i style="--swatch:#d2691e"></i>备案</span>
+                    <span><i style="--swatch:#00FFFF"></i>核验中</span>
+                  </div>
+                </div>
+                <div class="status-grid" id="statusGrid"></div>
+              </section>
+
+              <section class="group-section building-summary-panel">
+                <div class="section-title-row compact">
+                  <h2>楼栋概览</h2>
+                  <span>点击楼栋查看每户楼盘表</span>
+                </div>
+                <div class="building-card-grid" id="buildingCards"></div>
+              </section>
+
+              <section class="group-section building-panel is-hidden" id="buildingPanel">
+                <div class="section-title-row">
+                  <div>
+                    <h2 id="buildingTitle">选择楼栋查看楼盘表</h2>
+                    <p id="buildingHint">先从上方楼栋概览中选择一个楼栋</p>
+                    <div class="source-trail is-hidden" id="buildingSourceTrail" aria-label="住建委来源链路"></div>
+                  </div>
+                  <a class="official-link is-hidden" id="buildingOfficialLink" href="#" target="_blank" rel="noopener noreferrer">住建委楼栋页</a>
+                </div>
+                <div class="building-board-wrap">
+                  <div class="building-board-placeholder" id="buildingPlaceholder">楼栋被选中后，这里显示每层每户状态图</div>
+                  <div class="orientation-note is-hidden" id="orientationNote"></div>
+                  <div class="building-board" id="buildingBoard" aria-label="楼盘表"></div>
+                </div>
+              </section>
+
+              <section class="group-section project-section">
+                <section class="project-panel">
+                  <div class="section-title-row compact">
+                    <h2>预售项目</h2>
+                    <span id="projectScope">当前 7 条</span>
+                  </div>
+                  <div class="project-land-list" id="projectRows"></div>
+                </section>
+              </section>
+            </section>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="/static/app.js?v=13"></script>
+  </body>
+</html>
