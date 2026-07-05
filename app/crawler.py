@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -24,14 +26,20 @@ class RefreshError(RuntimeError):
 
 
 class ZjwClient:
-    def __init__(self, timeout: float = 20.0):
+    def __init__(
+        self,
+        timeout: float = 20.0,
+        retries: int = 3,
+        retry_delay: float = 1.0,
+        transport: httpx.BaseTransport | None = None,
+    ):
         self.timeout = timeout
+        self.retries = retries
+        self.retry_delay = retry_delay
+        self.transport = transport
 
     def get(self, url: str) -> str:
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            return response.text
+        return self._request_with_retry(lambda client: client.get(url))
 
     def post_project_list(self, page: int) -> str:
         data = {
@@ -45,10 +53,32 @@ class ZjwClient:
             "currentPage": str(page),
             "pageSize": "15",
         }
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-            response = client.post(ENTRY_URL, data=data)
-            response.raise_for_status()
-            return response.text
+        return self._request_with_retry(lambda client: client.post(ENTRY_URL, data=data))
+
+    def _request_with_retry(self, request: Callable[[httpx.Client], httpx.Response]) -> str:
+        last_error: Exception | None = None
+        attempts = self.retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                    transport=self.transport,
+                ) as client:
+                    response = request(client)
+                    response.raise_for_status()
+                    return response.text
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code < 500 and exc.response.status_code != 429:
+                    raise
+            except httpx.RequestError as exc:
+                last_error = exc
+            if attempt < attempts:
+                time.sleep(self.retry_delay)
+        if last_error is None:
+            raise RefreshError("request failed without an exception")
+        raise last_error
 
 
 class RefreshService:

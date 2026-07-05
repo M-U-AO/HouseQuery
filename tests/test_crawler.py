@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
-from app.crawler import RefreshService
+from app.crawler import RefreshService, ZjwClient
 from app.repository import Repository
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -62,6 +63,53 @@ def test_refresh_failure_preserves_previous_successful_snapshot(tmp_path, monkey
 
     assert repo.latest_successful_snapshot_id() == first_snapshot
     assert repo.dashboard()["snapshot"]["id"] == first_snapshot
+
+
+def test_zjw_client_retries_transient_disconnect() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return httpx.Response(200, text="ok")
+
+    client = ZjwClient(retries=1, retry_delay=0, transport=httpx.MockTransport(handler))
+
+    assert client.get("https://example.test/detail") == "ok"
+    assert calls == 2
+
+
+def test_zjw_client_retries_retryable_status() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(503, text="temporary unavailable")
+        return httpx.Response(200, text="ok")
+
+    client = ZjwClient(retries=1, retry_delay=0, transport=httpx.MockTransport(handler))
+
+    assert client.post_project_list(1) == "ok"
+    assert calls == 2
+
+
+def test_zjw_client_does_not_retry_non_retryable_status() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404, text="not found")
+
+    client = ZjwClient(retries=3, retry_delay=0, transport=httpx.MockTransport(handler))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.get("https://example.test/missing")
+    assert calls == 1
 
 
 def _minimal_project_detail() -> str:
