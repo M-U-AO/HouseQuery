@@ -33,3 +33,20 @@ DEAL_STATUS_CODES = {"signed", "recorded"}
 
 def get_refresh_token() -> str:
     return os.environ.get("REFRESH_TOKEN", "")
+
+
+def get_auto_refresh_enabled() -> bool:
+    return os.environ.get("AUTO_REFRESH_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def get_auto_refresh_time() -> str:
+    return os.environ.get("AUTO_REFRESH_TIME", "09:00")
+
+
+def get_auto_refresh_timezone() -> str:
+    return os.environ.get("AUTO_REFRESH_TIMEZONE", "Asia/Shanghai")

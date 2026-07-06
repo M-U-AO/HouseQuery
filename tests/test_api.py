@@ -1,6 +1,10 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+from app.main import _parse_daily_time, _seconds_until_next_daily_run, create_app
 from app.models import Building, HouseState, OfficialProject
 from app.repository import Repository
 
@@ -93,3 +97,22 @@ def test_refresh_requires_token_when_configured(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 401
     assert bad_response.status_code == 401
+
+
+def test_seconds_until_next_daily_run_same_day() -> None:
+    now = datetime(2026, 7, 6, 8, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    refresh_time = _parse_daily_time("09:00")
+
+    assert _seconds_until_next_daily_run(now, refresh_time) == 30 * 60
+
+
+def test_seconds_until_next_daily_run_next_day() -> None:
+    now = datetime(2026, 7, 6, 9, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
+    refresh_time = _parse_daily_time("09:00")
+
+    assert _seconds_until_next_daily_run(now, refresh_time) == (23 * 60 + 59) * 60
+
+
+def test_parse_daily_time_rejects_invalid_value() -> None:
+    with pytest.raises(ValueError, match="AUTO_REFRESH_TIME"):
+        _parse_daily_time("9am")

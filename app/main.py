@@ -4,14 +4,23 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from datetime import time as datetime_time
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import ENTRY_URL, get_refresh_token
+from app.config import (
+    ENTRY_URL,
+    get_auto_refresh_enabled,
+    get_auto_refresh_time,
+    get_auto_refresh_timezone,
+    get_refresh_token,
+)
 from app.crawler import RefreshService
 from app.repository import Repository
 
@@ -40,7 +49,18 @@ def create_app(repository: Repository | None = None) -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         repo.init_schema()
         repo.mark_abandoned_running_snapshots()
-        yield
+        auto_refresh_task: asyncio.Task[None] | None = None
+        if get_auto_refresh_enabled():
+            auto_refresh_task = asyncio.create_task(_run_daily_refresh(runtime))
+        try:
+            yield
+        finally:
+            if auto_refresh_task:
+                auto_refresh_task.cancel()
+                try:
+                    await auto_refresh_task
+                except asyncio.CancelledError:
+                    pass
 
     app = FastAPI(title="石景山期房余量查询", lifespan=lifespan)
     app.state.repository = repo
@@ -106,6 +126,38 @@ async def _run_refresh(runtime: RefreshRuntime) -> None:
         runtime.state.update(
             {"status": "success", "message": "刷新完成", "snapshot_id": snapshot_id}
         )
+
+
+async def _run_daily_refresh(runtime: RefreshRuntime) -> None:
+    timezone = ZoneInfo(get_auto_refresh_timezone())
+    refresh_time = _parse_daily_time(get_auto_refresh_time())
+    while True:
+        now = datetime.now(timezone)
+        await asyncio.sleep(_seconds_until_next_daily_run(now, refresh_time))
+        if not runtime.lock.locked():
+            await _run_refresh(runtime)
+
+
+def _parse_daily_time(value: str) -> datetime_time:
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+        return datetime_time(hour=hour, minute=minute)
+    except ValueError as exc:
+        raise ValueError(f"invalid AUTO_REFRESH_TIME {value!r}, expected HH:MM") from exc
+
+
+def _seconds_until_next_daily_run(now: datetime, refresh_time: datetime_time) -> float:
+    scheduled = now.replace(
+        hour=refresh_time.hour,
+        minute=refresh_time.minute,
+        second=0,
+        microsecond=0,
+    )
+    if scheduled <= now:
+        scheduled += timedelta(days=1)
+    return (scheduled - now).total_seconds()
 
 
 app = create_app()
