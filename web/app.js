@@ -374,7 +374,7 @@ function renderHomeChanges() {
   }
   document.getElementById("homeChangeList").innerHTML = items.map(item => `
     <div class="change-item">
-      <strong>${item.group} · ${item.building} · ${item.house}</strong>
+      <strong>${changeTitle(item, true)}</strong>
       <div class="change-flow">
         <span class="state-chip" style="--state-color:${STATUS[item.from].color}">${STATUS[item.from].label}</span>
         <span>到</span>
@@ -572,7 +572,7 @@ function renderChanges() {
       <div>
         ${group.items.map(item => `
           <div class="change-item">
-            <strong>${item.house}</strong>
+            <strong>${changeTitle(item, false)}</strong>
             <div class="change-flow">
               <span class="state-chip" style="--state-color:${STATUS[item.from].color}">${STATUS[item.from].label}</span>
               <span>到</span>
@@ -701,12 +701,22 @@ function normalizeCounts(counts) {
 function normalizeChanges(changes) {
   return changes.map(item => ({
     group: item.group_name || item.group || activeGroup.name,
+    project: item.project_name || item.project || "",
     building: item.building_name || item.building || item.building_id || "",
     house: item.house_no || item.house || "",
     from: item.from_status || item.from || "disabled",
     to: item.to_status || item.to || "disabled",
     note: item.change_type === "new" ? "新增房源" : item.change_type === "missing" ? "房源消失" : "状态变化",
   }));
+}
+
+function changeTitle(item, includeGroup) {
+  return [
+    includeGroup ? item.group : "",
+    item.project,
+    item.building,
+    item.house,
+  ].filter(Boolean).join(" · ");
 }
 
 function groupedChanges(changes) {

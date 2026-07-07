@@ -526,10 +526,11 @@ class Repository:
             dict(row)
             for row in conn.execute(
                 f"""
-                SELECT c.*, g.name AS group_name, b.name AS building_name
+                SELECT c.*, g.name AS group_name, b.name AS building_name, p.name AS project_name
                 FROM state_changes c
                 JOIN project_groups g ON g.id=c.group_id
                 LEFT JOIN buildings b ON b.building_id=c.building_id
+                LEFT JOIN official_projects p ON p.project_id=b.project_id
                 WHERE {where}
                 ORDER BY c.id DESC
                 LIMIT ?

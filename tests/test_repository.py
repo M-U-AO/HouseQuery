@@ -62,9 +62,11 @@ def test_snapshot_diff_and_dashboard(tmp_path) -> None:
     assert dashboard["metrics"]["available"] == 1
     assert dashboard["metrics"]["changes"] == 2
     assert dashboard["groups"][0]["deal_count"] == 2
+    assert dashboard["changes"][0]["project_name"] == "瑞宸苑"
 
     detail = repo.group_detail("ruiwenli")
     assert len(detail["changes"]) == 2
+    assert detail["changes"][0]["project_name"] == "瑞宸苑"
 
 
 def test_failed_snapshot_does_not_replace_latest(tmp_path) -> None:
