@@ -87,6 +87,17 @@ def test_static_mount_does_not_expose_project_root(tmp_path) -> None:
         assert client.get("/static/README.md").status_code == 404
 
 
+def test_index_revalidates_cached_html(tmp_path) -> None:
+    app = create_app(Repository(tmp_path / "app.db"))
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert "/static/app.js?v=14" in response.text
+
+
 def test_refresh_requires_token_when_configured(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REFRESH_TOKEN", "secret-token")
     app = create_app(Repository(tmp_path / "app.db"))

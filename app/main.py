@@ -110,7 +110,7 @@ def create_app(repository: Repository | None = None) -> FastAPI:
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(WEB_ROOT / "index.html")
+        return FileResponse(WEB_ROOT / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 
