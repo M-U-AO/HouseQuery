@@ -572,7 +572,7 @@ function renderChanges() {
       <div>
         ${group.items.map(item => `
           <div class="change-item">
-            <strong>${changeTitle(item, false)}</strong>
+            <strong>${detailChangeTitle(item)}</strong>
             <div class="change-flow">
               <span class="state-chip" style="--state-color:${STATUS[item.from].color}">${STATUS[item.from].label}</span>
               <span>到</span>
@@ -719,10 +719,14 @@ function changeTitle(item, includeGroup) {
   ].filter(Boolean).join(" · ");
 }
 
+function detailChangeTitle(item) {
+  return item.house || [item.project, item.building].filter(Boolean).join(" · ") || "未识别房源";
+}
+
 function groupedChanges(changes) {
   const groupsByBuilding = new Map();
   changes.forEach(item => {
-    const key = item.building || "未识别楼栋";
+    const key = [item.project, item.building].filter(Boolean).join(" · ") || "未识别楼栋";
     if (!groupsByBuilding.has(key)) {
       groupsByBuilding.set(key, { title: key, items: [] });
     }
