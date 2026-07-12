@@ -839,6 +839,18 @@ a {
   min-width: 674px;
 }
 
+.building-direction-note {
+  width: max-content;
+  min-width: 674px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--soft-line);
+  border-radius: 4px;
+  background: #fafafa;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .floor-label,
 .house-cell,
 .board-head {
