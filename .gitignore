@@ -6,8 +6,12 @@ __pycache__/
 *.egg-info/
 
 data/app.db
+data/*.db
 data/app.db-*
 data/raw/
+
+# Local Git worktrees for parallel feature work.
+.worktrees/
 
 # Local private deployment keys.
 .secrets/
