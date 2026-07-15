@@ -31,14 +31,16 @@ class RefreshError(RuntimeError):
 class ZjwClient:
     def __init__(
         self,
-        timeout: float = 20.0,
+        timeout: float = 180.0,
         retries: int = 3,
-        retry_delay: float = 1.0,
+        retry_delay: float = 5.0,
+        max_retry_delay: float = 60.0,
         transport: httpx.BaseTransport | None = None,
     ):
         self.timeout = timeout
         self.retries = retries
         self.retry_delay = retry_delay
+        self.max_retry_delay = max_retry_delay
         self.transport = transport
 
     def get(self, url: str) -> str:
@@ -78,10 +80,13 @@ class ZjwClient:
             except httpx.RequestError as exc:
                 last_error = exc
             if attempt < attempts:
-                time.sleep(self.retry_delay)
+                time.sleep(self._retry_sleep_seconds(attempt))
         if last_error is None:
             raise RefreshError("request failed without an exception")
         raise last_error
+
+    def _retry_sleep_seconds(self, failed_attempt: int) -> float:
+        return min(self.retry_delay * (2 ** (failed_attempt - 1)), self.max_retry_delay)
 
 
 class RefreshService:

@@ -110,6 +110,25 @@ def test_zjw_client_retries_retryable_status() -> None:
     assert calls == 2
 
 
+def test_zjw_client_uses_exponential_backoff(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.RemoteProtocolError("temporary disconnect")
+
+    monkeypatch.setattr("app.crawler.time.sleep", sleeps.append)
+    client = ZjwClient(retries=3, retry_delay=2, transport=httpx.MockTransport(handler))
+
+    with pytest.raises(httpx.RemoteProtocolError):
+        client.get("https://example.test/detail")
+
+    assert calls == 4
+    assert sleeps == [2, 4, 8]
+
+
 def test_zjw_client_does_not_retry_non_retryable_status() -> None:
     calls = 0
 
