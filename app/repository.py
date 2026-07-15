@@ -204,6 +204,37 @@ class Repository:
             ).fetchone()
             return int(row["id"]) if row else None
 
+    def houses_for_building_from_latest_successful(self, building_id: str) -> list[HouseState]:
+        snapshot_id = self.latest_successful_snapshot_id()
+        if snapshot_id is None:
+            return []
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM house_states
+                WHERE snapshot_id=? AND building_id=?
+                ORDER BY COALESCE(floor_no, -999) DESC, house_no
+                """,
+                (snapshot_id, building_id),
+            )
+            return [
+                HouseState(
+                    building_id=row["building_id"],
+                    project_id=row["project_id"],
+                    house_key=row["house_key"],
+                    house_no=row["house_no"],
+                    unit_no=row["unit_no"],
+                    floor_no=row["floor_no"],
+                    display_floor=row["display_floor"],
+                    status_code=row["status_code"],
+                    status_label=row["status_label"],
+                    status_color=row["status_color"],
+                    house_id=row["house_id"],
+                    source_url=row["source_url"],
+                )
+                for row in rows
+            ]
+
     def dashboard(self) -> dict:
         snapshot_id = self.latest_successful_snapshot_id()
         if snapshot_id is None:

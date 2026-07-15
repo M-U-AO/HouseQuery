@@ -53,16 +53,29 @@ def test_refresh_success_uses_fixtures_without_network(tmp_path, monkeypatch) ->
     assert (tmp_path / "raw" / str(snapshot_id) / "project_list_p1.html").exists()
 
 
-def test_refresh_failure_preserves_previous_successful_snapshot(tmp_path, monkeypatch) -> None:
+def test_refresh_reuses_previous_building_houses_on_building_failure(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
     repo = Repository(tmp_path / "app.db")
     first_snapshot = RefreshService(repo, client=FixtureClient()).refresh()
 
+    second_snapshot = RefreshService(repo, client=FixtureClient(fail_building=True)).refresh()
+
+    assert second_snapshot != first_snapshot
+    assert repo.latest_successful_snapshot_id() == second_snapshot
+    assert repo.dashboard()["snapshot"]["id"] == second_snapshot
+    assert repo.dashboard()["metrics"]["available"] > 0
+
+
+def test_refresh_building_failure_without_previous_snapshot_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
+    repo = Repository(tmp_path / "app.db")
+
     with pytest.raises(RuntimeError, match="simulated building network failure"):
         RefreshService(repo, client=FixtureClient(fail_building=True)).refresh()
 
-    assert repo.latest_successful_snapshot_id() == first_snapshot
-    assert repo.dashboard()["snapshot"]["id"] == first_snapshot
+    assert repo.latest_successful_snapshot_id() is None
 
 
 def test_zjw_client_retries_transient_disconnect() -> None:

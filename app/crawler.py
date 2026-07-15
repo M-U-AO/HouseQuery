@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import time
 from collections.abc import Callable
@@ -19,6 +20,8 @@ from app.config import (
 from app.models import Building, HouseState, OfficialProject
 from app.parser import parse_building_page, parse_project_detail, parse_project_list
 from app.repository import Repository
+
+logger = logging.getLogger(__name__)
 
 
 class RefreshError(RuntimeError):
@@ -136,15 +139,15 @@ class RefreshService:
             project_details.append(merged_project)
             buildings.extend(detail.buildings)
             for building in detail.buildings:
-                building_html = self.client.get(
-                    BUILDING_URL.format(
-                        sale_permit_id=building.project_id, building_id=building.building_id
-                    )
-                )
-                (raw_dir / f"building_{building.building_id}.html").write_text(
-                    building_html, encoding="utf-8"
+                building_url = BUILDING_URL.format(
+                    sale_permit_id=building.project_id,
+                    building_id=building.building_id,
                 )
                 try:
+                    building_html = self.client.get(building_url)
+                    (raw_dir / f"building_{building.building_id}.html").write_text(
+                        building_html, encoding="utf-8"
+                    )
                     parsed_houses = parse_building_page(
                         building_html,
                         project_id=building.project_id,
@@ -152,11 +155,25 @@ class RefreshService:
                         source_url=building.detail_url,
                     )
                 except Exception as exc:
-                    raise RefreshError(
+                    previous_houses = self.repository.houses_for_building_from_latest_successful(
+                        building.building_id
+                    )
+                    if not previous_houses:
+                        raise RefreshError(
+                            "failed parsing building "
+                            f"{building.building_id} of project {building.project_id} "
+                            f"({building.name}): {exc}"
+                        ) from exc
+                    logger.warning(
                         "failed parsing building "
-                        f"{building.building_id} of project {building.project_id} "
-                        f"({building.name}), html bytes={len(building_html.encode('utf-8'))}: {exc}"
-                    ) from exc
+                        "%s of project %s (%s); reused %s houses from previous snapshot: %s",
+                        building.building_id,
+                        building.project_id,
+                        building.name,
+                        len(previous_houses),
+                        exc,
+                    )
+                    parsed_houses = previous_houses
                 houses.extend(parsed_houses)
         if not buildings:
             raise RefreshError("no buildings collected")
