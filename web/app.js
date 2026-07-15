@@ -677,13 +677,13 @@ function houseColumnLabel(house) {
 
 function renderOrientationNote(columns) {
   const note = document.getElementById("orientationNote");
-  if (columns.includes("东侧-01") && columns.includes("西侧-02")) {
-    note.textContent = "列方向提示：左侧 01 户朝东，右侧 02 户朝西。";
-    note.classList.remove("is-hidden");
+  if (!columns.length) {
+    note.textContent = "";
+    note.classList.add("is-hidden");
     return;
   }
-  note.textContent = "";
-  note.classList.add("is-hidden");
+  note.textContent = "列方向提示：单元排列从东到西，左侧朝东，右侧朝西。";
+  note.classList.remove("is-hidden");
 }
 
 function normalizeCounts(counts) {
