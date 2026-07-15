@@ -19,16 +19,31 @@ class FixtureClient:
     touching the official site.
     """
 
-    def __init__(self, *, fail_building: bool = False):
+    def __init__(
+        self,
+        *,
+        fail_building: bool = False,
+        omit_ruichen_buildings: bool = False,
+        incomplete_list_once: bool = False,
+    ):
         self.fail_building = fail_building
+        self.omit_ruichen_buildings = omit_ruichen_buildings
+        self.incomplete_list_once = incomplete_list_once
         self.get_calls: list[str] = []
+        self.list_calls = 0
+        self.retries = 3
 
     def post_project_list(self, page: int) -> str:
+        self.list_calls += 1
+        if self.incomplete_list_once and self.list_calls <= 2:
+            return _minimal_project_detail()
         return (FIXTURES / f"project_list_sjs_p{page}.html").read_text(encoding="utf-8")
 
     def get(self, url: str) -> str:
         self.get_calls.append(url)
         if "projectID=8156386" in url:
+            if self.omit_ruichen_buildings:
+                return _minimal_project_detail()
             return (FIXTURES / "project_8156386_ruichen.html").read_text(encoding="utf-8")
         if "projectID=8102776" in url:
             return (FIXTURES / "project_8102776_ruiyu.html").read_text(encoding="utf-8")
@@ -76,6 +91,37 @@ def test_refresh_building_failure_without_previous_snapshot_fails(tmp_path, monk
         RefreshService(repo, client=FixtureClient(fail_building=True)).refresh()
 
     assert repo.latest_successful_snapshot_id() is None
+
+
+def test_refresh_reuses_previous_buildings_when_project_detail_omits_them(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
+    repo = Repository(tmp_path / "app.db")
+    first_snapshot = RefreshService(repo, client=FixtureClient()).refresh()
+
+    second_snapshot = RefreshService(
+        repo,
+        client=FixtureClient(omit_ruichen_buildings=True),
+    ).refresh()
+
+    assert second_snapshot != first_snapshot
+    assert repo.latest_successful_snapshot_id() == second_snapshot
+    houses = repo.building_detail("571199")["houses"]
+    assert houses
+    assert all(house["snapshot_id"] == second_snapshot for house in houses)
+
+
+def test_refresh_retries_incomplete_project_list(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr("app.crawler.time.sleep", lambda _: None)
+    repo = Repository(tmp_path / "app.db")
+    client = FixtureClient(incomplete_list_once=True)
+
+    snapshot_id = RefreshService(repo, client=client).refresh()
+
+    assert snapshot_id == repo.latest_successful_snapshot_id()
+    assert client.list_calls == 4
 
 
 def test_zjw_client_retries_transient_disconnect() -> None:

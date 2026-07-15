@@ -235,6 +235,30 @@ class Repository:
                 for row in rows
             ]
 
+    def buildings_for_project(self, project_id: str) -> list[Building]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM buildings
+                WHERE project_id=?
+                ORDER BY name, building_id
+                """,
+                (project_id,),
+            )
+            return [
+                Building(
+                    building_id=row["building_id"],
+                    project_id=row["project_id"],
+                    name=row["name"],
+                    detail_url=row["detail_url"],
+                    approved_units=row["approved_units"],
+                    approved_area=row["approved_area"],
+                    sale_status=row["sale_status"],
+                    price=row["price"],
+                )
+                for row in rows
+            ]
+
     def dashboard(self) -> dict:
         snapshot_id = self.latest_successful_snapshot_id()
         if snapshot_id is None:

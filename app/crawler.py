@@ -111,21 +111,7 @@ class RefreshService:
     def _collect(
         self, snapshot_id: int, raw_dir: Path
     ) -> tuple[list[OfficialProject], list[Building], list[HouseState]]:
-        list_html = []
-        for page in (1, 2):
-            html = self.client.post_project_list(page)
-            (raw_dir / f"project_list_p{page}.html").write_text(html, encoding="utf-8")
-            list_html.append(html)
-        listed_projects = _dedupe_projects(
-            [project for html in list_html for project in parse_project_list(html)]
-        )
-        in_scope_projects = [project for project in listed_projects if project.is_in_scope]
-        if len(in_scope_projects) != EXPECTED_IN_SCOPE_PROJECTS:
-            raise RefreshError(
-                "expected "
-                f"{EXPECTED_IN_SCOPE_PROJECTS} in-scope projects, "
-                f"got {len(in_scope_projects)}"
-            )
+        in_scope_projects = self._collect_project_list(raw_dir)
 
         project_details: list[OfficialProject] = []
         buildings: list[Building] = []
@@ -142,8 +128,26 @@ class RefreshService:
             )
             merged_project = _merge_project(listed_project, detail.project)
             project_details.append(merged_project)
-            buildings.extend(detail.buildings)
-            for building in detail.buildings:
+            parsed_buildings = list(detail.buildings)
+            omitted_buildings = _omitted_previous_buildings(
+                parsed_buildings,
+                self.repository.buildings_for_project(merged_project.project_id),
+            )
+            buildings.extend(parsed_buildings)
+            buildings.extend(omitted_buildings)
+            for building in omitted_buildings:
+                previous_houses = self.repository.houses_for_building_from_latest_successful(
+                    building.building_id
+                )
+                logger.warning(
+                    "project %s omitted building %s (%s); reused %s houses from previous snapshot",
+                    merged_project.project_id,
+                    building.building_id,
+                    building.name,
+                    len(previous_houses),
+                )
+                houses.extend(previous_houses)
+            for building in parsed_buildings:
                 building_url = BUILDING_URL.format(
                     sale_permit_id=building.project_id,
                     building_id=building.building_id,
@@ -186,6 +190,35 @@ class RefreshService:
             raise RefreshError("no houses collected")
         return project_details, buildings, houses
 
+    def _collect_project_list(self, raw_dir: Path) -> list[OfficialProject]:
+        attempts = self.client.retries + 1
+        last_count = 0
+        for attempt in range(1, attempts + 1):
+            list_html = []
+            for page in (1, 2):
+                html = self.client.post_project_list(page)
+                (raw_dir / f"project_list_p{page}.html").write_text(html, encoding="utf-8")
+                list_html.append(html)
+            listed_projects = _dedupe_projects(
+                [project for html in list_html for project in parse_project_list(html)]
+            )
+            in_scope_projects = [project for project in listed_projects if project.is_in_scope]
+            last_count = len(in_scope_projects)
+            if last_count == EXPECTED_IN_SCOPE_PROJECTS:
+                return in_scope_projects
+            if attempt < attempts:
+                logger.warning(
+                    "expected %s in-scope projects, got %s; retrying project list",
+                    EXPECTED_IN_SCOPE_PROJECTS,
+                    last_count,
+                )
+                time.sleep(_retry_sleep_seconds(attempt))
+        raise RefreshError(
+            "expected "
+            f"{EXPECTED_IN_SCOPE_PROJECTS} in-scope projects, "
+            f"got {last_count}"
+        )
+
     def _trim_raw_dirs(self) -> None:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
         dirs = sorted(
@@ -217,3 +250,19 @@ def _merge_project(listed: OfficialProject, detail: OfficialProject) -> Official
         approved_scope=detail.approved_scope,
         is_in_scope=listed.is_in_scope,
     )
+
+
+def _omitted_previous_buildings(
+    parsed_buildings: list[Building],
+    previous_buildings: list[Building],
+) -> list[Building]:
+    parsed_ids = {building.building_id for building in parsed_buildings}
+    return [
+        building
+        for building in previous_buildings
+        if building.building_id not in parsed_ids
+    ]
+
+
+def _retry_sleep_seconds(failed_attempt: int) -> float:
+    return min(5.0 * (2 ** (failed_attempt - 1)), 60.0)
