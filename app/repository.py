@@ -341,7 +341,7 @@ class Repository:
                     (snapshot_id,),
                 )
             }
-            changes = self._changes(conn, snapshot_id, limit=8)
+            changes = self._changes(conn, snapshot_id, limit=None)
             trend = [
                 {
                     "snapshot_id": row["id"],
@@ -569,14 +569,17 @@ class Repository:
         conn: sqlite3.Connection,
         snapshot_id: int,
         group_id: str | None = None,
-        limit: int = 20,
+        limit: int | None = 20,
     ) -> list[dict]:
         params: list[object] = [snapshot_id]
         where = "c.snapshot_id=?"
         if group_id:
             where += " AND c.group_id=?"
             params.append(group_id)
-        params.append(limit)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "LIMIT ?"
+            params.append(limit)
         return [
             dict(row)
             for row in conn.execute(
@@ -588,7 +591,7 @@ class Repository:
                 LEFT JOIN official_projects p ON p.project_id=b.project_id
                 WHERE {where}
                 ORDER BY c.id DESC
-                LIMIT ?
+                {limit_clause}
                 """,
                 params,
             )

@@ -366,7 +366,7 @@ function renderDaily() {
 
 function renderHomeChanges() {
   const items = homeChanges?.length
-    ? normalizeChanges(homeChanges).slice(0, 8)
+    ? normalizeChanges(homeChanges)
     : groups.flatMap(group => group.changes.map(item => ({ ...item, group: group.name }))).slice(0, 8);
   if (!items.length) {
     document.getElementById("homeChangeList").innerHTML = emptyChangeMessage();

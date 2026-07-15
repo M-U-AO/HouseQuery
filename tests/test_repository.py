@@ -61,6 +61,7 @@ def test_snapshot_diff_and_dashboard(tmp_path) -> None:
     assert dashboard["metrics"]["projects"] == 1
     assert dashboard["metrics"]["available"] == 1
     assert dashboard["metrics"]["changes"] == 2
+    assert len(dashboard["changes"]) == dashboard["metrics"]["changes"]
     assert dashboard["groups"][0]["deal_count"] == 2
     assert dashboard["changes"][0]["project_name"] == "瑞宸苑"
 
