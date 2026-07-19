@@ -8,6 +8,15 @@ const STATUS = {
   checking: { label: "资格核验中", color: "#00FFFF" },
 };
 
+const {
+  buildStatusTimeline,
+  createRequestGate,
+  escapeHtml,
+  safeColor,
+  safeUrl,
+  salesWindowLabel,
+} = window.HouseQueryLogic;
+
 let groups = [
   {
     id: "ruiwenli",
@@ -140,6 +149,14 @@ const buildingSets = {
 
 let activeGroup = groups[0];
 let activeBuilding = null;
+let selectedHouse = null;
+let salesWindow = "24h";
+let salesLoading = false;
+const houseHistoryCache = new Map();
+const houseHistoryRequests = new Map();
+const groupRequestGate = createRequestGate();
+const buildingRequestGate = createRequestGate();
+const houseRequestGate = createRequestGate();
 let currentView = "home";
 let dashboardMetrics = null;
 let homeChanges = null;
@@ -173,6 +190,7 @@ function render() {
   renderTrend();
   syncView();
   renderOverview();
+  renderBuildingSales();
   renderBuildingCards();
   renderProjects();
   renderChanges();
@@ -223,48 +241,84 @@ async function loadDashboard() {
 }
 
 async function openGroup(groupId) {
+  buildingRequestGate.invalidate();
+  dismissHousePopover();
   activeGroup = groups.find(group => group.id === groupId) || activeGroup;
   activeBuilding = null;
   currentView = "detail";
+  salesWindow = "24h";
+  salesLoading = false;
   if (apiBacked) {
-    const response = await fetch(`/api/groups/${groupId}`);
-    if (response.ok) {
-      const detail = await response.json();
-      activeGroup = {
-        ...activeGroup,
-        ...(detail.group || {}),
-        counts: normalizeCounts(detail.counts || {}),
-        projects: (detail.projects || []).map(project => ({
-          id: project.project_id,
-          name: project.name,
-          permit: project.permit_no,
-          land: project.land_location,
-          buildings: project.approved_scope,
-          url: project.detail_url,
-          status: "正在预售",
-        })),
-        buildings: detail.buildings || [],
-        changes: normalizeChanges(detail.changes || []),
-      };
-    }
+    await loadGroupDetail(groupId, salesWindow);
   }
   render();
 }
 
+async function loadGroupDetail(groupId, requestedWindow = salesWindow) {
+  const requestToken = groupRequestGate.next();
+  let response;
+  try {
+    response = await fetch(`/api/groups/${encodeURIComponent(groupId)}?change_window=${encodeURIComponent(requestedWindow)}`);
+  } catch {
+    return false;
+  }
+  if (!response.ok) {
+    return false;
+  }
+  const detail = await response.json();
+  if (
+    !groupRequestGate.isCurrent(requestToken) ||
+    activeGroup.id !== groupId ||
+    salesWindow !== requestedWindow
+  ) {
+    return false;
+  }
+  activeGroup = {
+    ...activeGroup,
+    ...(detail.group || {}),
+    counts: normalizeCounts(detail.counts || {}),
+    projects: (detail.projects || []).map(project => ({
+      id: project.project_id,
+      name: project.name,
+      permit: project.permit_no,
+      land: project.land_location,
+      buildings: project.approved_scope,
+      url: project.detail_url,
+      status: "正在预售",
+    })),
+    buildings: detail.buildings || [],
+    buildingStatusChanges: detail.status_changes_by_building || [],
+    windowStatusChanges: normalizeChanges(detail.status_changes || []),
+    changes: normalizeChanges(detail.changes || []),
+  };
+  return true;
+}
+
 async function openBuilding(buildingId) {
+  const requestToken = buildingRequestGate.next();
+  const groupId = activeGroup.id;
   const source = activeGroup.buildings || buildingSets[activeGroup.id] || [];
   activeBuilding = source.find(building => String(building.building_id || building.id) === buildingId);
+  selectedHouse = null;
+  hideHousePopover();
   if (apiBacked) {
-    const response = await fetch(`/api/buildings/${buildingId}`);
+    const response = await fetch(`/api/buildings/${encodeURIComponent(buildingId)}`);
     if (response.ok) {
       const detail = await response.json();
+      if (!buildingRequestGate.isCurrent(requestToken) || activeGroup.id !== groupId) {
+        return;
+      }
       activeBuilding = {
-        ...(detail.building || activeBuilding),
+        ...activeBuilding,
+        ...(detail.building || {}),
         id: buildingId,
         label: detail.building?.name || activeBuilding?.name || activeBuilding?.label,
         houses: detail.houses || [],
       };
     }
+  }
+  if (!buildingRequestGate.isCurrent(requestToken) || activeGroup.id !== groupId) {
+    return;
   }
   renderBuildingCards();
   renderBuildingBoard();
@@ -276,8 +330,8 @@ async function openBuilding(buildingId) {
 function renderGroups() {
   const list = document.getElementById("groupList");
   list.innerHTML = groups.map(group => `
-    <button class="group-button ${group.id === activeGroup.id ? "active" : ""}" data-group="${group.id}" type="button">
-      <strong>${group.name}</strong>
+    <button class="group-button ${group.id === activeGroup.id ? "active" : ""}" data-group="${escapeHtml(group.id)}" type="button">
+      <strong>${escapeHtml(group.name)}</strong>
       <span>${projectCount(group)} 条预售项目 · 房源 ${houseCount(group)} 套</span>
       <span>查看项目组详情</span>
     </button>
@@ -324,7 +378,7 @@ function syncView() {
 }
 
 function renderTrend() {
-  const values = trendData?.length ? trendData.map(item => item.value) : [6, 9, 5, 11, 8, 13, 10];
+  const values = trendData?.length ? trendData.map(item => Number(item.value) || 0) : [6, 9, 5, 11, 8, 13, 10];
   const max = Math.max(...values, 1);
   document.getElementById("trendChart").innerHTML = values.map((value, index) => `
     <div class="trend-bar">
@@ -337,20 +391,18 @@ function renderTrend() {
 
 function renderDaily() {
   document.getElementById("dailyGrid").innerHTML = groups.map(group => {
-    const sold = group.deal_count ?? group.changes.filter(
-      item => item.to === "signed" || item.to === "recorded"
-    ).length;
+    const changed = changeCount(group);
     return `
-      <button class="daily-card" data-group="${group.id}" type="button">
-        <strong>${group.name}</strong>
+      <button class="daily-card" data-group="${escapeHtml(group.id)}" type="button">
+        <strong>${escapeHtml(group.name)}</strong>
         <div class="daily-stats">
           <div class="daily-stat sale">
-            <span>本次成交</span>
-            <b>${sold}</b>
+            <span>本次状态变化</span>
+            <b>${changed}</b>
           </div>
           <div class="daily-stat">
-            <span>变化量</span>
-            <b>${changeCount(group)}</b>
+            <span>当前可售</span>
+            <b>${Number(group.counts?.available || 0)}</b>
           </div>
         </div>
       </button>
@@ -374,13 +426,13 @@ function renderHomeChanges() {
   }
   document.getElementById("homeChangeList").innerHTML = items.map(item => `
     <div class="change-item">
-      <strong>${changeTitle(item, true)}</strong>
+      <strong>${escapeHtml(changeTitle(item, true))}</strong>
       <div class="change-flow">
-        <span class="state-chip" style="--state-color:${STATUS[item.from].color}">${STATUS[item.from].label}</span>
+        <span class="state-chip" style="--state-color:${STATUS[item.from]?.color || "#ccc"}">${escapeHtml(STATUS[item.from]?.label || item.from)}</span>
         <span>到</span>
-        <span class="state-chip" style="--state-color:${STATUS[item.to].color}">${STATUS[item.to].label}</span>
+        <span class="state-chip" style="--state-color:${STATUS[item.to]?.color || "#ccc"}">${escapeHtml(STATUS[item.to]?.label || item.to)}</span>
       </div>
-      <span>${item.note}</span>
+      <span>${escapeHtml(item.note)}</span>
     </div>
   `).join("");
 }
@@ -396,14 +448,148 @@ function renderOverview() {
   `).join("");
 }
 
+function renderBuildingSales() {
+  const container = document.getElementById("buildingSalesChart");
+  const windowLabel = salesWindowLabel(salesWindow);
+  const rows = activeGroup.buildingStatusChanges || [];
+  const statusChanges = activeGroup.windowStatusChanges || [];
+  const totalChanges = rows.reduce((total, row) => total + Number(row.change_count || 0), 0);
+  const activeBuildings = rows.filter(row => Number(row.change_count || 0) > 0).length;
+  document.getElementById("salesSummary").textContent = totalChanges
+    ? `${totalChanges} 条变化 · ${activeBuildings} 栋`
+    : `${windowLabel}暂无状态变化`;
+  document.querySelector(".sales-title-row h2").textContent = `${windowLabel}状态变化`;
+  document.querySelectorAll("#salesWindowTabs button").forEach(button => {
+    const isActive = button.dataset.window === salesWindow;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+    button.onclick = () => selectSalesWindow(button.dataset.window);
+  });
+
+  if (salesLoading) {
+    document.getElementById("salesSummary").textContent = "正在读取状态变化";
+    container.innerHTML = '<div class="empty-state">正在加载所选时间范围</div>';
+    return;
+  }
+
+  if (!rows.length) {
+    container.innerHTML = `<div class="empty-state">${apiBacked ? `${escapeHtml(windowLabel)}未监测到房源状态变化` : "连接数据后显示状态变化"}</div>`;
+    return;
+  }
+
+  const max = Math.max(...rows.map(row => Number(row.change_count || 0)), 1);
+  const byProject = new Map();
+  rows.forEach(row => {
+    const project = row.project_name || "未识别项目";
+    if (!byProject.has(project)) {
+      byProject.set(project, []);
+    }
+    byProject.get(project).push(row);
+  });
+  container.innerHTML = Array.from(byProject.entries()).map(([project, buildings]) => `
+    <section class="sales-project-group">
+      <header><strong>${escapeHtml(project)}</strong><span>${buildings.reduce((total, item) => total + Number(item.change_count || 0), 0)} 条变化</span></header>
+      <div class="sales-bars">
+        ${buildings.sort((a, b) => Number(b.change_count || 0) - Number(a.change_count || 0)).map(row => {
+          const total = Number(row.change_count || 0);
+          const width = total ? Math.max((total / max) * 100, 7) : 0;
+          return `
+            <button class="sales-bar-row" data-building="${escapeHtml(row.building_id)}" type="button">
+              <span class="sales-building-name">${escapeHtml(row.building_name)}</span>
+              <span class="sales-bar-track" aria-label="${total} 条状态变化">
+                <i class="sales-bar-fill" style="width:${width}%"></i>
+              </span>
+              <span class="sales-value">${total}<small>条</small></span>
+            </button>
+          `;
+        }).join("")}
+      </div>
+      ${renderProjectStatusTimelines(project, buildings, statusChanges, windowLabel)}
+    </section>
+  `).join("");
+  container.querySelectorAll(".sales-bar-row, .status-house-row").forEach(button => {
+    button.addEventListener("click", () => openBuilding(button.dataset.building));
+  });
+}
+
+function renderProjectStatusTimelines(project, buildings, statusChanges, windowLabel) {
+  const buildingGroups = buildings.map(building => {
+    const changes = statusChanges.filter(item => (
+      item.project === project && item.building === building.building_name
+    ));
+    const byHouse = new Map();
+    changes.forEach(changeItem => {
+      if (!byHouse.has(changeItem.house)) {
+        byHouse.set(changeItem.house, []);
+      }
+      byHouse.get(changeItem.house).push(changeItem);
+    });
+    return {
+      building,
+      timelines: Array.from(byHouse.entries()).map(([house, events]) => ({
+        house,
+        ...buildStatusTimeline(events),
+      })),
+    };
+  }).filter(group => group.timelines.length);
+  if (!buildingGroups.length) {
+    return "";
+  }
+  return `
+    <div class="status-timeline-list">
+      <span class="status-timeline-title">${escapeHtml(windowLabel)}房源状态变化</span>
+      ${buildingGroups.map(({ building, timelines }) => `
+        <section class="status-building-group">
+          <strong>${escapeHtml(building.building_name)}</strong>
+          <div>
+            ${timelines.map(timeline => `
+              <button class="status-house-row" data-building="${escapeHtml(building.building_id)}" type="button">
+                <b>${escapeHtml(timeline.house)}</b>
+                <span class="status-chain">
+                  ${timeline.statuses.map((status, index) => `
+                    ${index ? '<i aria-hidden="true">→</i>' : ""}
+                    <em class="state-chip" style="--state-color:${STATUS[status]?.color || "#ccc"}">${escapeHtml(STATUS[status]?.label || status)}</em>
+                  `).join("")}
+                </span>
+                <span class="status-intervals">
+                  ${timeline.events.map((event, index) => `
+                    <time><small>${index + 1}</small>${escapeHtml(formatCompactInterval(event.previousCompletedAt, event.completedAt))}</time>
+                  `).join("")}
+                </span>
+              </button>
+            `).join("")}
+          </div>
+        </section>
+      `).join("")}
+    </div>
+  `;
+}
+
+async function selectSalesWindow(windowKey) {
+  if (!windowKey || windowKey === salesWindow) {
+    return;
+  }
+  salesWindow = windowKey;
+  salesLoading = true;
+  renderBuildingSales();
+  if (apiBacked) {
+    await loadGroupDetail(activeGroup.id, windowKey);
+  }
+  if (salesWindow !== windowKey) {
+    return;
+  }
+  salesLoading = false;
+  renderBuildingSales();
+}
+
 function renderBuildingCards() {
   const buildings = activeGroup.buildings?.length ? activeGroup.buildings : buildingSets[activeGroup.id] || [];
   document.getElementById("buildingCards").innerHTML = groupedBuildings(buildings).map(group => `
     <section class="building-land-group">
       <header class="building-land-header">
         <div>
-          <strong>${group.title}</strong>
-          <span>${group.meta}</span>
+          <strong>${escapeHtml(group.title)}</strong>
+          <span>${escapeHtml(group.meta)}</span>
         </div>
         ${sourceLink(group.projectUrl, "项目详情页")}
       </header>
@@ -432,9 +618,9 @@ function renderBuildingCards() {
 
 function buildingCardTemplate(building) {
   return `
-    <article class="building-card ${isActiveBuilding(building) ? "active" : ""}" data-building="${buildingKey(building)}" tabindex="0" role="button">
-      <strong>${buildingLabel(building)}</strong>
-      <span>${buildingPermit(building)}房源 ${buildingTotal(building)} 套 · 可售 ${building.available || building.counts?.available || 0}</span>
+    <article class="building-card ${isActiveBuilding(building) ? "active" : ""}" data-building="${escapeHtml(buildingKey(building))}" tabindex="0" role="button">
+      <strong>${escapeHtml(buildingLabel(building))}</strong>
+      <span>${escapeHtml(buildingPermit(building))}房源 ${buildingTotal(building)} 套 · 可售 ${building.available || building.counts?.available || 0}</span>
       <div class="building-source-links">
         ${sourceLink(building.project_url, "项目页")}
         ${sourceLink(building.detail_url, "楼栋页")}
@@ -526,8 +712,8 @@ function renderProjects() {
     <section class="project-land-group">
       <header class="project-land-header">
         <div>
-          <strong>${group.title}</strong>
-          <span>${group.meta}</span>
+          <strong>${escapeHtml(group.title)}</strong>
+          <span>${escapeHtml(group.meta)}</span>
         </div>
       </header>
       <div class="project-table-wrap">
@@ -543,10 +729,10 @@ function renderProjects() {
           <tbody>
             ${group.projects.map(project => `
               <tr>
-                <td>${project.name}${sourceLink(project.url, "项目页")}</td>
-                <td>${project.permit}</td>
-                <td>${project.buildings}</td>
-                <td><span class="pill">${project.status}</span></td>
+                <td>${escapeHtml(project.name)}${sourceLink(project.url, "项目页")}</td>
+                <td>${escapeHtml(project.permit)}</td>
+                <td>${escapeHtml(project.buildings)}</td>
+                <td><span class="pill">${escapeHtml(project.status)}</span></td>
               </tr>
             `).join("")}
           </tbody>
@@ -566,19 +752,19 @@ function renderChanges() {
   document.getElementById("changeList").innerHTML = groupedChanges(items).map(group => `
     <section class="change-tree-group">
       <header>
-        <strong>${group.title}</strong>
+        <strong>${escapeHtml(group.title)}</strong>
         <span>${group.items.length} 条变化</span>
       </header>
       <div>
         ${group.items.map(item => `
           <div class="change-item">
-            <strong>${detailChangeTitle(item)}</strong>
+            <strong>${escapeHtml(detailChangeTitle(item))}</strong>
             <div class="change-flow">
-              <span class="state-chip" style="--state-color:${STATUS[item.from].color}">${STATUS[item.from].label}</span>
+              <span class="state-chip" style="--state-color:${STATUS[item.from]?.color || "#ccc"}">${escapeHtml(STATUS[item.from]?.label || item.from)}</span>
               <span>到</span>
-              <span class="state-chip" style="--state-color:${STATUS[item.to].color}">${STATUS[item.to].label}</span>
+              <span class="state-chip" style="--state-color:${STATUS[item.to]?.color || "#ccc"}">${escapeHtml(STATUS[item.to]?.label || item.to)}</span>
             </div>
-            <span>${item.note}</span>
+            <span>${escapeHtml(item.note)}</span>
           </div>
         `).join("")}
       </div>
@@ -602,6 +788,7 @@ function renderBuildingBoard() {
     orientationNote.textContent = "";
     board.classList.add("is-hidden");
     board.innerHTML = "";
+    hideHousePopover();
     return;
   }
 
@@ -624,15 +811,16 @@ function renderBuildingBoard() {
   for (let floor = 15; floor >= 1; floor -= 1) {
     rows.push({ floor, houses: makeFloor(floor) });
   }
-  board.innerHTML = heads.map(head => `<div class="board-head">${head}</div>`).join("") +
+  board.innerHTML = heads.map(head => `<div class="board-head">${escapeHtml(head)}</div>`).join("") +
     rows.map(row => `
       <div class="floor-label">${row.floor}</div>
       ${row.houses.map(house => `
-        <div class="house-cell" style="--house-color:${STATUS[house.status].color}" title="${house.no} · ${STATUS[house.status].label}">
-          ${house.no}
+        <div class="house-cell" style="--house-color:${STATUS[house.status].color}" title="${escapeHtml(house.no)} · ${escapeHtml(STATUS[house.status].label)}">
+          ${escapeHtml(house.no)}
         </div>
       `).join("")}
     `).join("");
+  hideHousePopover();
 }
 
 function renderHousesFromApi(board, houses) {
@@ -642,7 +830,7 @@ function renderHousesFromApi(board, houses) {
     .sort(([a], [b]) => a.localeCompare(b, "zh-CN", { numeric: true }))).values()];
   renderOrientationNote(columns);
   board.style.gridTemplateColumns = `74px repeat(${Math.max(columns.length, 1)}, 150px)`;
-  board.innerHTML = ["自然楼层", ...columns].map(head => `<div class="board-head">${head}</div>`).join("") +
+  board.innerHTML = ["自然楼层", ...columns].map(head => `<div class="board-head">${escapeHtml(head)}</div>`).join("") +
     floors.map(floor => {
       const cells = columns.map(column => {
         const house = houses.find(item => item.floor_no === floor && houseColumnLabel(item) === column);
@@ -650,13 +838,199 @@ function renderHousesFromApi(board, houses) {
           return `<div class="house-cell" style="--house-color:#f3f3f3"></div>`;
         }
         return `
-          <div class="house-cell" style="--house-color:${house.status_color}" title="${house.house_no} · ${house.status_label}">
-            ${house.house_no}
-          </div>
+          <button class="house-cell" data-house-key="${escapeHtml(house.house_key)}" style="--house-color:${safeColor(house.status_color)}" title="${escapeHtml(house.house_no)} · ${escapeHtml(house.status_label)}" type="button">
+            ${escapeHtml(house.house_no)}
+          </button>
         `;
       }).join("");
       return `<div class="floor-label">${floor}</div>${cells}`;
     }).join("");
+  board.querySelectorAll(".house-cell[data-house-key]").forEach(cell => {
+    cell.addEventListener("mouseenter", () => openHousePopover(cell.dataset.houseKey, cell));
+    cell.addEventListener("mouseleave", () => {
+      if (!selectedHouse?.pinned) {
+        dismissHousePopover();
+      }
+    });
+    cell.addEventListener("focus", () => openHousePopover(cell.dataset.houseKey, cell));
+    cell.addEventListener("blur", () => {
+      if (!selectedHouse?.pinned) {
+        dismissHousePopover();
+      }
+    });
+    cell.addEventListener("click", () => {
+      const isPinned = selectedHouse?.key === cell.dataset.houseKey && selectedHouse.pinned;
+      if (isPinned) {
+        dismissHousePopover();
+        return;
+      }
+      openHousePopover(cell.dataset.houseKey, cell, true);
+    });
+  });
+}
+
+async function openHousePopover(houseKey, anchor, pinned = false) {
+  const house = activeBuilding?.houses?.find(item => item.house_key === houseKey);
+  if (!house || !activeBuilding) {
+    return;
+  }
+  const buildingId = buildingKey(activeBuilding);
+  const key = `${buildingId}:${houseKey}`;
+  const cachedHistory = houseHistoryCache.get(key);
+  const requestToken = houseRequestGate.next();
+  selectedHouse = {
+    key: houseKey,
+    house,
+    anchor,
+    pinned,
+    requestToken,
+    loading: !cachedHistory,
+    history: cachedHistory || null,
+  };
+  renderHousePopover();
+  if (cachedHistory) {
+    return;
+  }
+  try {
+    let request = houseHistoryRequests.get(key);
+    if (!request) {
+      request = fetch(`/api/buildings/${encodeURIComponent(buildingId)}/houses/${encodeURIComponent(houseKey)}/history`)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`house history ${response.status}`);
+          }
+          return response.json();
+        });
+      houseHistoryRequests.set(key, request);
+    }
+    const history = await request;
+    houseHistoryCache.set(key, history);
+    if (
+      !houseRequestGate.isCurrent(requestToken) ||
+      selectedHouse?.requestToken !== requestToken ||
+      buildingKey(activeBuilding) !== buildingId
+    ) {
+      return;
+    }
+    selectedHouse = { ...selectedHouse, loading: false, history };
+  } catch {
+    if (!houseRequestGate.isCurrent(requestToken) || selectedHouse?.requestToken !== requestToken) {
+      return;
+    }
+    selectedHouse = { ...selectedHouse, loading: false, history: null, error: true };
+  } finally {
+    houseHistoryRequests.delete(key);
+  }
+  renderHousePopover();
+}
+
+function renderHousePopover() {
+  const panel = document.getElementById("houseHistoryPopover");
+  if (!selectedHouse) {
+    panel.classList.add("is-hidden");
+    panel.innerHTML = "";
+    return;
+  }
+  panel.classList.remove("is-hidden");
+  if (selectedHouse.loading) {
+    panel.innerHTML = `<strong>${escapeHtml(selectedHouse.house.house_no)}</strong><span>正在读取状态变化</span>`;
+    positionHousePopover();
+    return;
+  }
+  if (selectedHouse.error || !selectedHouse.history?.baseline) {
+    panel.innerHTML = `<strong>${escapeHtml(selectedHouse.house.house_no)}</strong><span>未找到状态变化记录</span>`;
+    positionHousePopover();
+    return;
+  }
+  const history = selectedHouse.history;
+  const baselineTime = formatTimelineTime(history.baseline.completed_at);
+  panel.innerHTML = `
+    <header><strong>${escapeHtml(selectedHouse.house.house_no)}</strong><span>${history.events.length ? `${history.events.length} 次状态变化` : "未发现状态变化"}</span></header>
+    ${history.events.length ? `<ol>${history.events.map(event => `
+      <li>
+        <time>${escapeHtml(formatChangeInterval(event.previous_completed_at, event.completed_at))}</time>
+        <span class="state-chip" style="--state-color:${STATUS[event.from_status]?.color || "#ccc"}">${escapeHtml(STATUS[event.from_status]?.label || event.from_status)}</span>
+        <i>变为</i>
+        <span class="state-chip" style="--state-color:${STATUS[event.to_status]?.color || "#ccc"}">${escapeHtml(STATUS[event.to_status]?.label || event.to_status)}</span>
+      </li>
+    `).join("")}</ol>` : ""}
+    <p>最早记录 ${escapeHtml(baselineTime)} · 当时为${escapeHtml(STATUS[history.baseline.status_code]?.label || history.baseline.status_label)}；此前未找到状态变化。</p>
+  `;
+  positionHousePopover();
+}
+
+function positionHousePopover() {
+  const panel = document.getElementById("houseHistoryPopover");
+  const anchor = selectedHouse?.anchor;
+  if (!anchor || panel.classList.contains("is-hidden")) {
+    return;
+  }
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(320, window.innerWidth - 24);
+  let left = rect.left + (rect.width / 2) - (width / 2);
+  left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
+  panel.style.width = `${width}px`;
+  panel.style.left = `${left}px`;
+  panel.style.top = `${rect.bottom + 8}px`;
+  const panelHeight = panel.offsetHeight;
+  if (rect.bottom + panelHeight + 12 > window.innerHeight && rect.top > panelHeight + 12) {
+    panel.style.top = `${rect.top - panelHeight - 8}px`;
+  }
+}
+
+function hideHousePopover() {
+  const panel = document.getElementById("houseHistoryPopover");
+  panel?.classList.add("is-hidden");
+}
+
+function dismissHousePopover() {
+  selectedHouse = null;
+  houseRequestGate.invalidate();
+  renderHousePopover();
+}
+
+window.addEventListener("scroll", () => {
+  if (selectedHouse?.pinned) {
+    positionHousePopover();
+    return;
+  }
+  dismissHousePopover();
+}, true);
+
+window.addEventListener("resize", () => {
+  if (selectedHouse) {
+    positionHousePopover();
+  }
+});
+
+function formatTimelineTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "未知时间" : formatDateTime(date);
+}
+
+function formatChangeInterval(previousValue, currentValue) {
+  const current = formatTimelineTime(currentValue);
+  if (!previousValue) {
+    return `截至 ${current} 监测到`;
+  }
+  return `监测区间 ${formatTimelineTime(previousValue)}–${current}`;
+}
+
+function formatCompactInterval(previousValue, currentValue) {
+  const previous = new Date(previousValue);
+  const current = new Date(currentValue);
+  if (Number.isNaN(current.getTime())) {
+    return "监测时间未知";
+  }
+  if (Number.isNaN(previous.getTime())) {
+    return `截至 ${formatDateTime(current)}`;
+  }
+  const previousText = formatDateTime(previous);
+  const currentText = formatDateTime(current);
+  const sameDay = previous.toLocaleDateString("zh-CN") === current.toLocaleDateString("zh-CN");
+  return sameDay
+    ? `${previousText}–${currentText.slice(-5)}`
+    : `${previousText}–${currentText}`;
 }
 
 function houseColumnKey(house) {
@@ -706,6 +1080,8 @@ function normalizeChanges(changes) {
     house: item.house_no || item.house || "",
     from: item.from_status || item.from || "disabled",
     to: item.to_status || item.to || "disabled",
+    completedAt: item.completed_at || item.completedAt || "",
+    previousCompletedAt: item.previous_completed_at || item.previousCompletedAt || "",
     note: item.change_type === "new" ? "新增房源" : item.change_type === "missing" ? "房源消失" : "状态变化",
   }));
 }
@@ -781,22 +1157,24 @@ function formatDateTime(date) {
 
 function renderOfficialEntryLink() {
   const link = document.getElementById("officialEntryLink");
-  if (!sourceLinks.official_entry) {
+  const url = safeUrl(sourceLinks.official_entry);
+  if (!url) {
     link.classList.add("is-hidden");
     return;
   }
-  link.href = sourceLinks.official_entry;
+  link.href = url;
   link.textContent = sourceLinks.official_entry_label || "住建委入口";
   link.classList.remove("is-hidden");
 }
 
 function renderBuildingOfficialLink(url) {
   const link = document.getElementById("buildingOfficialLink");
-  if (!url) {
+  const safeLink = safeUrl(url);
+  if (!safeLink) {
     link.classList.add("is-hidden");
     return;
   }
-  link.href = url;
+  link.href = safeLink;
   link.classList.remove("is-hidden");
 }
 
@@ -825,17 +1203,19 @@ function renderBuildingSourceTrail(building) {
 }
 
 function sourceTrailLink(url, label) {
-  if (!url) {
+  const safeLink = safeUrl(url);
+  if (!safeLink) {
     return "";
   }
-  return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  return `<a href="${escapeHtml(safeLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
 function sourceLink(url, label) {
-  if (!url) {
+  const safeLink = safeUrl(url);
+  if (!safeLink) {
     return "";
   }
-  return `<a class="official-link inline-source-link" href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  return `<a class="official-link inline-source-link" href="${escapeHtml(safeLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
 function projectCount(group) {

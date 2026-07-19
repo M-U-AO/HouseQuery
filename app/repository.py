@@ -4,7 +4,7 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.config import DB_PATH
@@ -396,7 +396,12 @@ class Repository:
                 "changes": changes,
             }
 
-    def group_detail(self, group_id: str) -> dict:
+    def group_detail(
+        self,
+        group_id: str,
+        change_window_hours: int = 24,
+        as_of: datetime | None = None,
+    ) -> dict:
         snapshot_id = self.latest_successful_snapshot_id()
         with self.connect() as conn:
             group = conn.execute("SELECT * FROM project_groups WHERE id=?", (group_id,)).fetchone()
@@ -409,6 +414,8 @@ class Repository:
                     "changes": [],
                 }
             counts = self._group_house_counts(conn, snapshot_id).get(group_id, {})
+            change_cutoff = (as_of or datetime.now(UTC)) - timedelta(hours=change_window_hours)
+            changes_since = change_cutoff.isoformat(timespec="seconds")
             projects = [
                 dict(row)
                 for row in conn.execute(
@@ -438,11 +445,36 @@ class Repository:
                     (snapshot_id, group_id),
                 )
             ]
+            status_changes_by_building = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT
+                      b.building_id,
+                      b.name AS building_name,
+                      p.name AS project_name,
+                      COUNT(*) AS change_count
+                    FROM state_changes c
+                    JOIN snapshots s ON s.id=c.snapshot_id
+                    JOIN buildings b ON b.building_id=c.building_id
+                    JOIN official_projects p ON p.project_id=b.project_id
+                    WHERE c.group_id=? AND s.completed_at>=?
+                      AND c.change_type='status' AND s.status='success'
+                    GROUP BY b.building_id
+                    ORDER BY p.name, b.name
+                    """,
+                    (group_id, changes_since),
+                )
+            ]
             return {
                 "group": dict(group) if group else None,
                 "counts": counts,
                 "projects": projects,
                 "buildings": buildings,
+                "status_changes_by_building": status_changes_by_building,
+                "status_changes": self._status_changes(conn, group_id, changes_since),
+                "change_window_hours": change_window_hours,
+                "change_time_basis": "snapshot_observed_at",
                 "changes": self._changes(conn, snapshot_id, group_id=group_id, limit=30),
             }
 
@@ -472,6 +504,45 @@ class Repository:
                 )
             ]
             return {"building": dict(building) if building else None, "houses": houses}
+
+    def house_history(self, building_id: str, house_key: str) -> dict:
+        """Return recorded status transitions for one house across successful snapshots."""
+        with self.connect() as conn:
+            baseline = conn.execute(
+                """
+                SELECT h.status_code, h.status_label, h.status_color, s.completed_at
+                FROM house_states h
+                JOIN snapshots s ON s.id=h.snapshot_id
+                WHERE h.building_id=? AND h.house_key=? AND s.status='success'
+                ORDER BY s.id ASC
+                LIMIT 1
+                """,
+                (building_id, house_key),
+            ).fetchone()
+            if baseline is None:
+                return {}
+            events = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    WITH successful_snapshots AS (
+                      SELECT id, completed_at,
+                        LAG(completed_at) OVER (ORDER BY id) AS previous_completed_at
+                      FROM snapshots
+                      WHERE status='success'
+                    )
+                    SELECT c.from_status, c.to_status, s.completed_at,
+                      s.previous_completed_at
+                    FROM state_changes c
+                    JOIN successful_snapshots s ON s.id=c.snapshot_id
+                    WHERE c.building_id=? AND c.house_key=?
+                      AND c.change_type='status'
+                    ORDER BY c.snapshot_id DESC, c.id DESC
+                    """,
+                    (building_id, house_key),
+                )
+            ]
+            return {"baseline": dict(baseline), "events": events}
 
     def _write_changes(
         self,
@@ -600,6 +671,35 @@ class Repository:
             )
         ]
 
+    def _status_changes(
+        self,
+        conn: sqlite3.Connection,
+        group_id: str,
+        changes_since: str,
+    ) -> list[dict]:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                WITH successful_snapshots AS (
+                  SELECT id, completed_at,
+                    LAG(completed_at) OVER (ORDER BY id) AS previous_completed_at
+                  FROM snapshots
+                  WHERE status='success'
+                )
+                SELECT c.*, s.completed_at, s.previous_completed_at,
+                  b.name AS building_name, p.name AS project_name
+                FROM state_changes c
+                JOIN successful_snapshots s ON s.id=c.snapshot_id
+                JOIN buildings b ON b.building_id=c.building_id
+                JOIN official_projects p ON p.project_id=b.project_id
+                WHERE c.group_id=? AND s.completed_at>=?
+                  AND c.change_type='status'
+                ORDER BY s.completed_at, c.id
+                """,
+                (group_id, changes_since),
+            )
+        ]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS project_groups (
@@ -682,4 +782,13 @@ ON house_states(snapshot_id, project_id);
 
 CREATE INDEX IF NOT EXISTS idx_state_changes_snapshot_group
 ON state_changes(snapshot_id, group_id);
+
+CREATE INDEX IF NOT EXISTS idx_state_changes_group_snapshot_status
+ON state_changes(group_id, snapshot_id, to_status);
+
+CREATE INDEX IF NOT EXISTS idx_state_changes_building_house_snapshot
+ON state_changes(building_id, house_key, snapshot_id);
+
+CREATE INDEX IF NOT EXISTS idx_house_states_building_house_snapshot
+ON house_states(building_id, house_key, snapshot_id);
 """

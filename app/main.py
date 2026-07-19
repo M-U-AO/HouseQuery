@@ -39,6 +39,7 @@ class RefreshRuntime:
 
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+CHANGE_WINDOWS = {"24h": 24, "3d": 72, "7d": 168, "30d": 720}
 
 
 def create_app(repository: Repository | None = None) -> FastAPI:
@@ -77,8 +78,10 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         return payload
 
     @app.get("/api/groups/{group_id}")
-    def group_detail(group_id: str) -> dict:
-        detail = repo.group_detail(group_id)
+    def group_detail(group_id: str, change_window: str = "24h") -> dict:
+        if change_window not in CHANGE_WINDOWS:
+            raise HTTPException(status_code=400, detail="invalid change window")
+        detail = repo.group_detail(group_id, CHANGE_WINDOWS[change_window])
         if not detail or not detail.get("group"):
             raise HTTPException(status_code=404, detail="group data not found")
         return detail
@@ -88,6 +91,13 @@ def create_app(repository: Repository | None = None) -> FastAPI:
         detail = repo.building_detail(building_id)
         if not detail or not detail.get("building"):
             raise HTTPException(status_code=404, detail="building data not found")
+        return detail
+
+    @app.get("/api/buildings/{building_id}/houses/{house_key}/history")
+    def house_history(building_id: str, house_key: str) -> dict:
+        detail = repo.house_history(building_id, house_key)
+        if not detail:
+            raise HTTPException(status_code=404, detail="house history not found")
         return detail
 
     @app.post("/api/refresh")

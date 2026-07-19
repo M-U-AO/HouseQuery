@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import _parse_daily_time, _seconds_until_next_daily_run, create_app
+from app.main import CHANGE_WINDOWS, _parse_daily_time, _seconds_until_next_daily_run, create_app
 from app.models import Building, HouseState, OfficialProject
 from app.repository import Repository
 
@@ -95,7 +95,8 @@ def test_index_revalidates_cached_html(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-cache"
-    assert "/static/app.js?v=17" in response.text
+    assert "/static/app_logic.js?v=24" in response.text
+    assert "/static/app.js?v=24" in response.text
 
 
 def test_refresh_requires_token_when_configured(tmp_path, monkeypatch) -> None:
@@ -127,3 +128,32 @@ def test_seconds_until_next_daily_run_next_day() -> None:
 def test_parse_daily_time_rejects_invalid_value() -> None:
     with pytest.raises(ValueError, match="AUTO_REFRESH_TIME"):
         _parse_daily_time("9am")
+
+
+@pytest.mark.parametrize("window_key,hours", CHANGE_WINDOWS.items())
+def test_group_change_window_api_mapping(tmp_path, monkeypatch, window_key, hours) -> None:
+    repo = Repository(tmp_path / "app.db")
+    observed: list[int] = []
+
+    def group_detail(group_id: str, change_window_hours: int = 24) -> dict:
+        observed.append(change_window_hours)
+        return {"group": {"id": group_id}, "change_window_hours": change_window_hours}
+
+    monkeypatch.setattr(repo, "group_detail", group_detail)
+    app = create_app(repo)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/groups/ruiwenli?change_window={window_key}")
+
+    assert response.status_code == 200
+    assert response.json()["change_window_hours"] == hours
+    assert observed == [hours]
+
+
+def test_group_change_window_api_rejects_unknown_value(tmp_path) -> None:
+    app = create_app(Repository(tmp_path / "app.db"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/groups/ruiwenli?change_window=2d")
+
+    assert response.status_code == 400

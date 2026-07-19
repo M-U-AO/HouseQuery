@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>石景山期房余量查询</title>
-    <link rel="stylesheet" href="/static/styles.css?v=17" />
+    <link rel="stylesheet" href="/static/styles.css?v=24" />
   </head>
   <body>
     <div class="app-shell">
@@ -66,7 +66,7 @@
               <section class="change-overview-section daily-panel">
                 <div class="section-title-row compact">
                   <h2>本次各小区变化</h2>
-                  <span>成交数量与状态变化</span>
+                  <span>本次变化与当前可售</span>
                 </div>
                 <div class="daily-grid" id="dailyGrid"></div>
               </section>
@@ -100,6 +100,20 @@
                   <p id="activeGroupMeta">7 条预售项目 · 北京鑫安兴业</p>
                 </div>
               </header>
+
+              <section class="group-section building-sales-panel">
+                <div class="section-title-row compact sales-title-row">
+                  <h2>近24小时状态变化</h2>
+                  <div class="sales-window-tabs" id="salesWindowTabs" role="group" aria-label="状态变化时间范围">
+                    <button data-window="24h" type="button">近24小时</button>
+                    <button data-window="3d" type="button">近3天</button>
+                    <button data-window="7d" type="button">近7天</button>
+                    <button data-window="30d" type="button">近30天</button>
+                  </div>
+                  <span id="salesSummary">暂无状态变化</span>
+                </div>
+                <div class="building-sales-chart" id="buildingSalesChart"></div>
+              </section>
 
               <section class="group-section changes-panel detail-changes-panel">
                 <div class="section-title-row compact">
@@ -168,7 +182,9 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="house-history-popover is-hidden" id="houseHistoryPopover" role="tooltip" aria-live="polite"></div>
 
-    <script src="/static/app.js?v=17"></script>
+    <script src="/static/app_logic.js?v=24"></script>
+    <script src="/static/app.js?v=24"></script>
   </body>
 </html>
