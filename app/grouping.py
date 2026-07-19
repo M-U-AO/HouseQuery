@@ -29,6 +29,19 @@ GROUP_BY_PROJECT_ID = {
     "6219204": "yujing",
 }
 
+PROJECT_LAND_BY_ID = {
+    "8102776": "石景山区西黄村棚户区改造土地开发项目1606-648地块",
+    "8156388": "石景山区西黄村棚户区改造土地开发项目1606-648地块",
+    "8104626": "石景山区西黄村棚户区改造土地开发项目1606-650地块",
+    "8104625": "石景山区西黄村棚户区改造土地开发项目1606-650地块",
+    "8116266": "石景山区西黄村棚户区改造土地开发项目1606-650地块",
+    "8138322": "石景山区西黄村棚户区改造土地开发项目1606-650地块",
+    "8156386": "石景山区西黄村棚户区改造土地开发项目1606-650地块",
+    "8115251": "石景山区西黄村棚户区改造土地开发项目1606-640地块",
+    "8130368": "石景山区西黄村棚户区改造土地开发项目1606-640地块",
+    "8156387": "石景山区西黄村棚户区改造土地开发项目1606-640地块",
+}
+
 
 def group_for_project(project_id: str, name: str = "") -> tuple[str, bool]:
     if project_id in GROUP_BY_PROJECT_ID:
@@ -46,3 +59,7 @@ def group_for_project(project_id: str, name: str = "") -> tuple[str, bool]:
     if name == "玉景阳光里":
         return "yujing", False
     return "unknown", False
+
+
+def known_land_for_project(project_id: str) -> str:
+    return PROJECT_LAND_BY_ID.get(project_id, "")

@@ -5,7 +5,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.crawler import RefreshService, ZjwClient
+from app.crawler import RefreshService, ZjwClient, _merge_project
+from app.models import OfficialProject
 from app.repository import Repository
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -122,6 +123,27 @@ def test_refresh_retries_incomplete_project_list(tmp_path, monkeypatch) -> None:
 
     assert snapshot_id == repo.latest_successful_snapshot_id()
     assert client.list_calls == 4
+
+
+def test_merge_project_fills_known_land_when_detail_is_blank() -> None:
+    listed = OfficialProject(
+        project_id="8156388",
+        group_id="ruiwenli",
+        name="瑞玉苑",
+        permit_no="京房售证字(2026)4号",
+        detail_url="https://example.test/project/8156388",
+        is_in_scope=True,
+    )
+    detail = OfficialProject(
+        project_id="8156388",
+        group_id="ruiwenli",
+        name="瑞玉苑",
+        permit_no="",
+    )
+
+    merged = _merge_project(listed, detail)
+
+    assert merged.land_location == "石景山区西黄村棚户区改造土地开发项目1606-648地块"
 
 
 def test_zjw_client_retries_transient_disconnect() -> None:

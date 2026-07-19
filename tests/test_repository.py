@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from app.models import Building, HouseState, OfficialProject
 from app.repository import Repository
 
@@ -85,3 +87,32 @@ def test_failed_snapshot_does_not_replace_latest(tmp_path) -> None:
     repo.mark_snapshot_failed(failed, "network failed")
 
     assert repo.latest_successful_snapshot_id() == first
+
+
+def test_blank_project_land_does_not_overwrite_existing_land(tmp_path) -> None:
+    repo = Repository(tmp_path / "app.db")
+    repo.init_schema()
+
+    first = repo.create_snapshot()
+    first_project = replace(
+        project(),
+        land_location="石景山区西黄村棚户区改造土地开发项目1606-650地块",
+    )
+    repo.save_successful_snapshot(
+        first,
+        [first_project],
+        [building()],
+        [house("1单元-101", "available")],
+    )
+
+    second = repo.create_snapshot()
+    second_project = replace(project(), land_location="")
+    repo.save_successful_snapshot(
+        second,
+        [second_project],
+        [building()],
+        [house("1单元-101", "signed")],
+    )
+
+    detail = repo.group_detail("ruiwenli")
+    assert detail["projects"][0]["land_location"] == first_project.land_location

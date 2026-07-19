@@ -117,7 +117,10 @@ class Repository:
                       permit_no=excluded.permit_no,
                       issue_date=excluded.issue_date,
                       detail_url=excluded.detail_url,
-                      land_location=excluded.land_location,
+                      land_location=COALESCE(
+                        NULLIF(excluded.land_location, ''),
+                        official_projects.land_location
+                      ),
                       developer=excluded.developer,
                       planning_permit_no=excluded.planning_permit_no,
                       approved_scope=excluded.approved_scope,

@@ -17,6 +17,7 @@ from app.config import (
     RAW_SNAPSHOT_KEEP,
     SHIJINGSHAN_DISTRICT_ID,
 )
+from app.grouping import known_land_for_project
 from app.models import Building, HouseState, OfficialProject
 from app.parser import parse_building_page, parse_project_detail, parse_project_list
 from app.repository import Repository
@@ -244,7 +245,9 @@ def _merge_project(listed: OfficialProject, detail: OfficialProject) -> Official
         permit_no=detail.permit_no or listed.permit_no,
         issue_date=detail.issue_date or listed.issue_date,
         detail_url=listed.detail_url,
-        land_location=detail.land_location,
+        land_location=detail.land_location
+        or listed.land_location
+        or known_land_for_project(listed.project_id),
         developer=detail.developer,
         planning_permit_no=detail.planning_permit_no,
         approved_scope=detail.approved_scope,
