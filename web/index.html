@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>石景山期房余量查询</title>
-    <link rel="stylesheet" href="/static/styles.css?v=24" />
+    <link rel="stylesheet" href="/static/styles.css?v=25" />
   </head>
   <body>
     <div class="app-shell">
@@ -22,6 +22,17 @@
           </button>
         </div>
       </header>
+
+      <section class="refresh-notice is-hidden" id="refreshNotice" aria-live="polite">
+        <div>
+          <strong id="refreshNoticeTitle">今日刷新失败</strong>
+          <span id="refreshNoticeSummary"></span>
+        </div>
+        <details>
+          <summary>查看异常明细</summary>
+          <ul id="refreshIssueList"></ul>
+        </details>
+      </section>
 
       <main class="dashboard home-dashboard">
         <section class="workspace">
@@ -184,7 +195,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <div class="house-history-popover is-hidden" id="houseHistoryPopover" role="tooltip" aria-live="polite"></div>
 
-    <script src="/static/app_logic.js?v=24"></script>
-    <script src="/static/app.js?v=24"></script>
+    <script src="/static/app_logic.js?v=25"></script>
+    <script src="/static/app.js?v=25"></script>
   </body>
 </html>

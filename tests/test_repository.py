@@ -141,9 +141,32 @@ def test_failed_snapshot_does_not_replace_latest(tmp_path) -> None:
     )
 
     failed = repo.create_snapshot()
+    repo.record_refresh_issue(
+        failed,
+        scope="building",
+        project_id="p1",
+        project_name="瑞宸苑",
+        building_id="b1",
+        building_name="1#住宅楼",
+        reason="住建委请求超时",
+    )
     repo.mark_snapshot_failed(failed, "network failed")
 
     assert repo.latest_successful_snapshot_id() == first
+    attempt = repo.dashboard()["latest_attempt"]
+    assert attempt["id"] == failed
+    assert attempt["status"] == "failed"
+    assert attempt["issues"] == [
+        {
+            "scope": "building",
+            "project_id": "p1",
+            "project_name": "瑞宸苑",
+            "building_id": "b1",
+            "building_name": "1#住宅楼",
+            "reason": "住建委请求超时",
+            "fallback_used": False,
+        }
+    ]
 
 
 def test_blank_project_land_does_not_overwrite_existing_land(tmp_path) -> None:

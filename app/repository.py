@@ -84,6 +84,38 @@ class Repository:
                 (utc_now(), error[:2000], snapshot_id),
             )
 
+    def record_refresh_issue(
+        self,
+        snapshot_id: int,
+        *,
+        scope: str,
+        reason: str,
+        project_id: str = "",
+        project_name: str = "",
+        building_id: str = "",
+        building_name: str = "",
+        fallback_used: bool = False,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO refresh_issues (
+                  snapshot_id, scope, project_id, project_name,
+                  building_id, building_name, reason, fallback_used
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    scope,
+                    project_id,
+                    project_name,
+                    building_id,
+                    building_name,
+                    reason[:1000],
+                    int(fallback_used),
+                ),
+            )
+
     def mark_abandoned_running_snapshots(self) -> None:
         with self.connect() as conn:
             conn.execute(
@@ -292,12 +324,14 @@ class Repository:
         snapshot_id = self.latest_successful_snapshot_id()
         if snapshot_id is None:
             with self.connect() as conn:
+                latest_attempt = self._latest_attempt(conn)
                 groups = [
                     dict(row)
                     for row in conn.execute("SELECT * FROM project_groups ORDER BY sort_order")
                 ]
             return {
                 "snapshot": None,
+                "latest_attempt": latest_attempt,
                 "metrics": {
                     "projects": 0,
                     "buildings": 0,
@@ -320,6 +354,7 @@ class Repository:
                 "changes": [],
             }
         with self.connect() as conn:
+            latest_attempt = self._latest_attempt(conn)
             snapshot = conn.execute("SELECT * FROM snapshots WHERE id=?", (snapshot_id,)).fetchone()
             previous_snapshot = conn.execute(
                 """
@@ -399,6 +434,7 @@ class Repository:
             ).fetchone()["count"]
             return {
                 "snapshot": dict(snapshot),
+                "latest_attempt": latest_attempt,
                 "previous_snapshot": dict(previous_snapshot) if previous_snapshot else None,
                 "metrics": {
                     "projects": total_projects,
@@ -421,6 +457,29 @@ class Repository:
                 "trend": trend,
                 "changes": changes,
             }
+
+    @staticmethod
+    def _latest_attempt(conn: sqlite3.Connection) -> dict | None:
+        snapshot = conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        if snapshot is None:
+            return None
+        issues = [
+            {
+                **dict(row),
+                "fallback_used": bool(row["fallback_used"]),
+            }
+            for row in conn.execute(
+                """
+                SELECT scope, project_id, project_name, building_id,
+                       building_name, reason, fallback_used
+                FROM refresh_issues
+                WHERE snapshot_id=?
+                ORDER BY id
+                """,
+                (snapshot["id"],),
+            )
+        ]
+        return {**dict(snapshot), "issues": issues}
 
     def group_detail(
         self,
@@ -769,6 +828,21 @@ CREATE TABLE IF NOT EXISTS snapshots (
   source_scope TEXT NOT NULL DEFAULT 'shijingshan_17',
   error_message TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS refresh_issues (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+  scope TEXT NOT NULL,
+  project_id TEXT NOT NULL DEFAULT '',
+  project_name TEXT NOT NULL DEFAULT '',
+  building_id TEXT NOT NULL DEFAULT '',
+  building_name TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL,
+  fallback_used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_issues_snapshot
+ON refresh_issues(snapshot_id);
 
 CREATE TABLE IF NOT EXISTS house_states (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

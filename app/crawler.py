@@ -112,21 +112,36 @@ class RefreshService:
     def _collect(
         self, snapshot_id: int, raw_dir: Path
     ) -> tuple[list[OfficialProject], list[Building], list[HouseState]]:
-        in_scope_projects = self._collect_project_list(raw_dir)
+        in_scope_projects = self._collect_project_list(snapshot_id, raw_dir)
 
         project_details: list[OfficialProject] = []
         buildings: list[Building] = []
         houses: list[HouseState] = []
 
         for listed_project in sorted(in_scope_projects, key=lambda item: item.project_id):
-            project_html = self.client.get(PROJECT_URL.format(project_id=listed_project.project_id))
-            (raw_dir / f"project_{listed_project.project_id}.html").write_text(
-                project_html, encoding="utf-8"
-            )
-            detail = parse_project_detail(
-                project_html,
-                fallback_project_id=listed_project.project_id,
-            )
+            try:
+                project_html = self.client.get(
+                    PROJECT_URL.format(project_id=listed_project.project_id)
+                )
+                (raw_dir / f"project_{listed_project.project_id}.html").write_text(
+                    project_html, encoding="utf-8"
+                )
+                detail = parse_project_detail(
+                    project_html,
+                    fallback_project_id=listed_project.project_id,
+                )
+            except Exception as exc:
+                self.repository.record_refresh_issue(
+                    snapshot_id,
+                    scope="project",
+                    project_id=listed_project.project_id,
+                    project_name=listed_project.name,
+                    reason=_friendly_error(exc),
+                )
+                raise RefreshError(
+                    f"项目 {listed_project.name}（{listed_project.project_id}）抓取失败："
+                    f"{_friendly_error(exc)}"
+                ) from exc
             merged_project = _merge_project(listed_project, detail.project)
             project_details.append(merged_project)
             parsed_buildings = list(detail.buildings)
@@ -146,6 +161,16 @@ class RefreshService:
                     building.building_id,
                     building.name,
                     len(previous_houses),
+                )
+                self.repository.record_refresh_issue(
+                    snapshot_id,
+                    scope="building",
+                    project_id=merged_project.project_id,
+                    project_name=merged_project.name,
+                    building_id=building.building_id,
+                    building_name=building.name,
+                    reason="项目详情页未返回该楼栋",
+                    fallback_used=True,
                 )
                 houses.extend(previous_houses)
             for building in parsed_buildings:
@@ -169,6 +194,15 @@ class RefreshService:
                         building.building_id
                     )
                     if not previous_houses:
+                        self.repository.record_refresh_issue(
+                            snapshot_id,
+                            scope="building",
+                            project_id=merged_project.project_id,
+                            project_name=merged_project.name,
+                            building_id=building.building_id,
+                            building_name=building.name,
+                            reason=_friendly_error(exc),
+                        )
                         raise RefreshError(
                             "failed parsing building "
                             f"{building.building_id} of project {building.project_id} "
@@ -183,6 +217,16 @@ class RefreshService:
                         len(previous_houses),
                         exc,
                     )
+                    self.repository.record_refresh_issue(
+                        snapshot_id,
+                        scope="building",
+                        project_id=merged_project.project_id,
+                        project_name=merged_project.name,
+                        building_id=building.building_id,
+                        building_name=building.name,
+                        reason=_friendly_error(exc),
+                        fallback_used=True,
+                    )
                     parsed_houses = previous_houses
                 houses.extend(parsed_houses)
         if not buildings:
@@ -191,7 +235,9 @@ class RefreshService:
             raise RefreshError("no houses collected")
         return project_details, buildings, houses
 
-    def _collect_project_list(self, raw_dir: Path) -> list[OfficialProject]:
+    def _collect_project_list(
+        self, snapshot_id: int, raw_dir: Path
+    ) -> list[OfficialProject]:
         attempts = self.client.retries + 1
         last_count = 0
         last_error: Exception | None = None
@@ -240,6 +286,16 @@ class RefreshService:
             }
             merged_projects.update(observed_projects)
             if len(merged_projects) == EXPECTED_IN_SCOPE_PROJECTS:
+                for project in cached_projects:
+                    if project.project_id not in observed_projects:
+                        self.repository.record_refresh_issue(
+                            snapshot_id,
+                            scope="project_list",
+                            project_id=project.project_id,
+                            project_name=project.name,
+                            reason="住建委入口列表未返回该项目",
+                            fallback_used=True,
+                        )
                 logger.warning(
                     "project list remained incomplete after retries (got %s); "
                     "reused %s cached projects",
@@ -249,6 +305,14 @@ class RefreshService:
                 return list(merged_projects.values())
 
         error_suffix = f"; last error: {last_error}" if last_error else ""
+        self.repository.record_refresh_issue(
+            snapshot_id,
+            scope="project_list",
+            reason=(
+                f"住建委入口应返回 {EXPECTED_IN_SCOPE_PROJECTS} 个项目，"
+                f"实际仅返回 {last_count} 个{error_suffix}"
+            ),
+        )
         raise RefreshError(
             "expected "
             f"{EXPECTED_IN_SCOPE_PROJECTS} in-scope projects, "
@@ -270,6 +334,16 @@ def _dedupe_projects(projects: list[OfficialProject]) -> list[OfficialProject]:
     for project in projects:
         result[project.project_id] = project
     return list(result.values())
+
+
+def _friendly_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "住建委请求超时"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"住建委返回 HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.RequestError):
+        return f"住建委网络请求失败：{exc}"
+    return str(exc)
 
 
 def _merge_project(listed: OfficialProject, detail: OfficialProject) -> OfficialProject:

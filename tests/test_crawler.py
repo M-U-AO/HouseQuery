@@ -24,11 +24,13 @@ class FixtureClient:
         self,
         *,
         fail_building: bool = False,
+        fail_project: bool = False,
         omit_ruichen_buildings: bool = False,
         incomplete_list_once: bool = False,
         always_incomplete_list: bool = False,
     ):
         self.fail_building = fail_building
+        self.fail_project = fail_project
         self.omit_ruichen_buildings = omit_ruichen_buildings
         self.incomplete_list_once = incomplete_list_once
         self.always_incomplete_list = always_incomplete_list
@@ -47,6 +49,8 @@ class FixtureClient:
     def get(self, url: str) -> str:
         self.get_calls.append(url)
         if "projectID=8156386" in url:
+            if self.fail_project:
+                raise httpx.ReadTimeout("simulated project timeout")
             if self.omit_ruichen_buildings:
                 return _minimal_project_detail()
             return (FIXTURES / "project_8156386_ruichen.html").read_text(encoding="utf-8")
@@ -86,6 +90,9 @@ def test_refresh_reuses_previous_building_houses_on_building_failure(
     assert repo.latest_successful_snapshot_id() == second_snapshot
     assert repo.dashboard()["snapshot"]["id"] == second_snapshot
     assert repo.dashboard()["metrics"]["available"] > 0
+    issues = repo.dashboard()["latest_attempt"]["issues"]
+    assert issues[0]["scope"] == "building"
+    assert issues[0]["fallback_used"] is True
 
 
 def test_refresh_building_failure_without_previous_snapshot_fails(tmp_path, monkeypatch) -> None:
@@ -96,6 +103,28 @@ def test_refresh_building_failure_without_previous_snapshot_fails(tmp_path, monk
         RefreshService(repo, client=FixtureClient(fail_building=True)).refresh()
 
     assert repo.latest_successful_snapshot_id() is None
+
+
+def test_refresh_records_project_name_when_project_detail_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
+    repo = Repository(tmp_path / "app.db")
+
+    with pytest.raises(RuntimeError, match="瑞宸苑.*住建委请求超时"):
+        RefreshService(repo, client=FixtureClient(fail_project=True)).refresh()
+
+    attempt = repo.dashboard()["latest_attempt"]
+    assert attempt["status"] == "failed"
+    assert attempt["issues"] == [
+        {
+            "scope": "project",
+            "project_id": "8156386",
+            "project_name": "瑞宸苑",
+            "building_id": "",
+            "building_name": "",
+            "reason": "住建委请求超时",
+            "fallback_used": False,
+        }
+    ]
 
 
 def test_refresh_reuses_previous_buildings_when_project_detail_omits_them(
@@ -144,6 +173,10 @@ def test_refresh_reuses_cached_projects_when_list_remains_incomplete(
     assert repo.latest_successful_snapshot_id() == second_snapshot
     assert repo.dashboard()["metrics"]["projects"] == 17
     assert client.list_calls == 8
+    issues = repo.dashboard()["latest_attempt"]["issues"]
+    assert len(issues) == 17
+    assert all(issue["scope"] == "project_list" for issue in issues)
+    assert all(issue["fallback_used"] is True for issue in issues)
 
 
 def test_refresh_incomplete_list_without_cached_projects_fails(tmp_path, monkeypatch) -> None:
@@ -155,6 +188,9 @@ def test_refresh_incomplete_list_without_cached_projects_fails(tmp_path, monkeyp
         RefreshService(repo, client=FixtureClient(always_incomplete_list=True)).refresh()
 
     assert repo.latest_successful_snapshot_id() is None
+    attempt = repo.dashboard()["latest_attempt"]
+    assert attempt["status"] == "failed"
+    assert attempt["issues"][0]["scope"] == "project_list"
 
 
 def test_merge_project_fills_known_land_when_detail_is_blank() -> None:

@@ -162,6 +162,7 @@ let dashboardMetrics = null;
 let homeChanges = null;
 let trendData = null;
 let snapshotInfo = null;
+let latestAttempt = null;
 let previousRefreshInfo = null;
 let sourceLinks = {};
 let apiBacked = false;
@@ -206,6 +207,7 @@ async function loadDashboard() {
     const payload = await response.json();
     apiBacked = true;
     snapshotInfo = payload.snapshot || null;
+    latestAttempt = payload.latest_attempt || null;
     previousRefreshInfo = payload.previous_snapshot || null;
     sourceLinks = payload.source_links || {};
     dashboardMetrics = payload.metrics;
@@ -353,11 +355,11 @@ function renderMetrics() {
     document.getElementById("metricChanges").textContent = dashboardMetrics.changes;
     document.getElementById("metricNew").textContent = dashboardMetrics.new_projects;
     document.getElementById("groupCount").textContent = `${groups.length} 个项目组`;
-    document.getElementById("refreshState").textContent = formatSnapshotTime(snapshotInfo);
     document.getElementById("homeChangeCompareText").textContent = compareRefreshText();
     document.getElementById("snapshotText").textContent = hasComparableSnapshot()
       ? "本次刷新数据已加载"
       : "首次刷新数据已加载，暂无历史对比";
+    renderRefreshOutcome();
     return;
   }
   const allCounts = groups.reduce((acc, group) => {
@@ -370,6 +372,42 @@ function renderMetrics() {
   document.getElementById("metricChanges").textContent = groups.reduce((n, g) => n + g.changes.length, 0);
   document.getElementById("metricNew").textContent = "0";
   document.getElementById("groupCount").textContent = `${groups.length} 个项目组`;
+}
+
+function renderRefreshOutcome() {
+  const notice = document.getElementById("refreshNotice");
+  const issues = latestAttempt?.issues || [];
+  const failed = latestAttempt?.status === "failed";
+  const partial = latestAttempt?.status === "success" && issues.length > 0;
+  notice.classList.toggle("is-hidden", !failed && !partial);
+
+  if (!failed && !partial) {
+    document.getElementById("refreshState").textContent = formatSnapshotTime(snapshotInfo);
+    return;
+  }
+
+  const attemptTime = formatAttemptTime(latestAttempt);
+  document.getElementById("refreshState").textContent = failed
+    ? `刷新失败 ${attemptTime}`
+    : `部分成功 ${attemptTime}`;
+  document.getElementById("snapshotText").textContent = failed
+    ? "仍展示上次成功刷新数据"
+    : "部分页面使用上次成功数据";
+  document.getElementById("refreshNoticeTitle").textContent = failed
+    ? "今日刷新失败"
+    : "本次刷新部分成功";
+  document.getElementById("refreshNoticeSummary").textContent = failed
+    ? `当前仍展示 ${formatSnapshotTime(snapshotInfo).replace("本次刷新 ", "")} 的成功数据。`
+    : `共 ${issues.length} 处使用历史数据兜底，其余数据已更新。`;
+
+  const fallbackIssue = failed && issues.length === 0 && latestAttempt.error_message
+    ? [{ reason: latestAttempt.error_message }]
+    : issues;
+  document.getElementById("refreshIssueList").innerHTML = fallbackIssue.map(issue => {
+    const target = [issue.project_name, issue.building_name].filter(Boolean).join(" · ") || "项目入口";
+    const fallback = issue.fallback_used ? "，已使用上次成功数据" : "";
+    return `<li><strong>${escapeHtml(target)}</strong><span>${escapeHtml(issue.reason || "未知错误")}${fallback}</span></li>`;
+  }).join("");
 }
 
 function syncView() {
@@ -1132,6 +1170,13 @@ function formatSnapshotTime(snapshot) {
     return "刷新数据已加载";
   }
   return `本次刷新 ${formatDateTime(date)}`;
+}
+
+function formatAttemptTime(attempt) {
+  const value = attempt?.completed_at || attempt?.started_at;
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : formatDateTime(date);
 }
 
 function compareRefreshText() {

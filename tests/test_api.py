@@ -95,8 +95,8 @@ def test_index_revalidates_cached_html(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-cache"
-    assert "/static/app_logic.js?v=24" in response.text
-    assert "/static/app.js?v=24" in response.text
+    assert "/static/app_logic.js?v=25" in response.text
+    assert "/static/app.js?v=25" in response.text
 
 
 def test_refresh_requires_token_when_configured(tmp_path, monkeypatch) -> None:
