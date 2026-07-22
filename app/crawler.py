@@ -194,19 +194,37 @@ class RefreshService:
     def _collect_project_list(self, raw_dir: Path) -> list[OfficialProject]:
         attempts = self.client.retries + 1
         last_count = 0
+        last_error: Exception | None = None
+        observed_projects: dict[str, OfficialProject] = {}
         for attempt in range(1, attempts + 1):
             list_html = []
             for page in (1, 2):
-                html = self.client.post_project_list(page)
-                (raw_dir / f"project_list_p{page}.html").write_text(html, encoding="utf-8")
+                try:
+                    html = self.client.post_project_list(page)
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(
+                        "failed fetching project list page %s on attempt %s: %s",
+                        page,
+                        attempt,
+                        exc,
+                    )
+                    continue
+                (raw_dir / f"project_list_p{page}.html").write_text(
+                    html, encoding="utf-8"
+                )
                 list_html.append(html)
             listed_projects = _dedupe_projects(
                 [project for html in list_html for project in parse_project_list(html)]
             )
-            in_scope_projects = [project for project in listed_projects if project.is_in_scope]
-            last_count = len(in_scope_projects)
+            observed_projects.update(
+                (project.project_id, project)
+                for project in listed_projects
+                if project.is_in_scope
+            )
+            last_count = len(observed_projects)
             if last_count == EXPECTED_IN_SCOPE_PROJECTS:
-                return in_scope_projects
+                return list(observed_projects.values())
             if attempt < attempts:
                 logger.warning(
                     "expected %s in-scope projects, got %s; retrying project list",
@@ -214,10 +232,27 @@ class RefreshService:
                     last_count,
                 )
                 time.sleep(_retry_sleep_seconds(attempt))
+
+        cached_projects = self.repository.in_scope_projects()
+        if len(cached_projects) == EXPECTED_IN_SCOPE_PROJECTS:
+            merged_projects = {
+                project.project_id: project for project in cached_projects
+            }
+            merged_projects.update(observed_projects)
+            if len(merged_projects) == EXPECTED_IN_SCOPE_PROJECTS:
+                logger.warning(
+                    "project list remained incomplete after retries (got %s); "
+                    "reused %s cached projects",
+                    last_count,
+                    EXPECTED_IN_SCOPE_PROJECTS - last_count,
+                )
+                return list(merged_projects.values())
+
+        error_suffix = f"; last error: {last_error}" if last_error else ""
         raise RefreshError(
             "expected "
             f"{EXPECTED_IN_SCOPE_PROJECTS} in-scope projects, "
-            f"got {last_count}"
+            f"got {last_count}{error_suffix}"
         )
 
     def _trim_raw_dirs(self) -> None:

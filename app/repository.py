@@ -207,6 +207,32 @@ class Repository:
             ).fetchone()
             return int(row["id"]) if row else None
 
+    def in_scope_projects(self) -> list[OfficialProject]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM official_projects
+                WHERE is_in_scope=1
+                ORDER BY project_id
+                """
+            )
+            return [
+                OfficialProject(
+                    project_id=row["project_id"],
+                    group_id=row["group_id"],
+                    name=row["name"],
+                    permit_no=row["permit_no"],
+                    issue_date=row["issue_date"],
+                    detail_url=row["detail_url"],
+                    land_location=row["land_location"],
+                    developer=row["developer"],
+                    planning_permit_no=row["planning_permit_no"],
+                    approved_scope=row["approved_scope"],
+                    is_in_scope=bool(row["is_in_scope"]),
+                )
+                for row in rows
+            ]
+
     def houses_for_building_from_latest_successful(self, building_id: str) -> list[HouseState]:
         snapshot_id = self.latest_successful_snapshot_id()
         if snapshot_id is None:

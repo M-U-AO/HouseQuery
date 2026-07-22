@@ -26,17 +26,21 @@ class FixtureClient:
         fail_building: bool = False,
         omit_ruichen_buildings: bool = False,
         incomplete_list_once: bool = False,
+        always_incomplete_list: bool = False,
     ):
         self.fail_building = fail_building
         self.omit_ruichen_buildings = omit_ruichen_buildings
         self.incomplete_list_once = incomplete_list_once
+        self.always_incomplete_list = always_incomplete_list
         self.get_calls: list[str] = []
         self.list_calls = 0
         self.retries = 3
 
     def post_project_list(self, page: int) -> str:
         self.list_calls += 1
-        if self.incomplete_list_once and self.list_calls <= 2:
+        if self.always_incomplete_list or (
+            self.incomplete_list_once and self.list_calls <= 2
+        ):
             return _minimal_project_detail()
         return (FIXTURES / f"project_list_sjs_p{page}.html").read_text(encoding="utf-8")
 
@@ -123,6 +127,34 @@ def test_refresh_retries_incomplete_project_list(tmp_path, monkeypatch) -> None:
 
     assert snapshot_id == repo.latest_successful_snapshot_id()
     assert client.list_calls == 4
+
+
+def test_refresh_reuses_cached_projects_when_list_remains_incomplete(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr("app.crawler.time.sleep", lambda _: None)
+    repo = Repository(tmp_path / "app.db")
+    first_snapshot = RefreshService(repo, client=FixtureClient()).refresh()
+    client = FixtureClient(always_incomplete_list=True)
+
+    second_snapshot = RefreshService(repo, client=client).refresh()
+
+    assert second_snapshot != first_snapshot
+    assert repo.latest_successful_snapshot_id() == second_snapshot
+    assert repo.dashboard()["metrics"]["projects"] == 17
+    assert client.list_calls == 8
+
+
+def test_refresh_incomplete_list_without_cached_projects_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.crawler.RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr("app.crawler.time.sleep", lambda _: None)
+    repo = Repository(tmp_path / "app.db")
+
+    with pytest.raises(RuntimeError, match="expected 17 in-scope projects, got 0"):
+        RefreshService(repo, client=FixtureClient(always_incomplete_list=True)).refresh()
+
+    assert repo.latest_successful_snapshot_id() is None
 
 
 def test_merge_project_fills_known_land_when_detail_is_blank() -> None:
