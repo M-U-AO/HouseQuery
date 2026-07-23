@@ -239,6 +239,18 @@ class Repository:
             ).fetchone()
             return int(row["id"]) if row else None
 
+    def has_successful_snapshot_since(self, completed_after: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM snapshots
+                WHERE status='success' AND completed_at >= ?
+                LIMIT 1
+                """,
+                (completed_after,),
+            ).fetchone()
+            return row is not None
+
     def in_scope_projects(self) -> list[OfficialProject]:
         with self.connect() as conn:
             rows = conn.execute(

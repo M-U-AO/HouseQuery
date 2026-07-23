@@ -4,7 +4,13 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import CHANGE_WINDOWS, _parse_daily_time, _seconds_until_next_daily_run, create_app
+from app.main import (
+    CHANGE_WINDOWS,
+    _next_scheduled_refresh,
+    _parse_daily_time,
+    _seconds_until_next_daily_run,
+    create_app,
+)
 from app.models import Building, HouseState, OfficialProject
 from app.repository import Repository
 
@@ -128,6 +134,29 @@ def test_seconds_until_next_daily_run_next_day() -> None:
 def test_parse_daily_time_rejects_invalid_value() -> None:
     with pytest.raises(ValueError, match="AUTO_REFRESH_TIME"):
         _parse_daily_time("9am")
+
+
+@pytest.mark.parametrize(
+    ("now", "expected", "is_retry"),
+    [
+        ("2026-07-23 08:30", "2026-07-23 09:00", False),
+        ("2026-07-23 09:01", "2026-07-23 15:00", True),
+        ("2026-07-23 15:01", "2026-07-24 09:00", False),
+    ],
+)
+def test_next_scheduled_refresh_chooses_primary_or_retry(now, expected, is_retry) -> None:
+    timezone = ZoneInfo("Asia/Shanghai")
+    current = datetime.strptime(now, "%Y-%m-%d %H:%M").replace(tzinfo=timezone)
+    expected_at = datetime.strptime(expected, "%Y-%m-%d %H:%M").replace(tzinfo=timezone)
+
+    scheduled, observed_retry = _next_scheduled_refresh(
+        current,
+        _parse_daily_time("09:00"),
+        _parse_daily_time("15:00"),
+    )
+
+    assert scheduled == expected_at
+    assert observed_retry is is_retry
 
 
 @pytest.mark.parametrize("window_key,hours", CHANGE_WINDOWS.items())

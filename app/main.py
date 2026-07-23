@@ -4,7 +4,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from datetime import time as datetime_time
 from pathlib import Path
 from typing import Annotated
@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import (
     ENTRY_URL,
     get_auto_refresh_enabled,
+    get_auto_refresh_retry_time,
     get_auto_refresh_time,
     get_auto_refresh_timezone,
     get_refresh_token,
@@ -141,9 +142,22 @@ async def _run_refresh(runtime: RefreshRuntime) -> None:
 async def _run_daily_refresh(runtime: RefreshRuntime) -> None:
     timezone = ZoneInfo(get_auto_refresh_timezone())
     refresh_time = _parse_daily_time(get_auto_refresh_time())
+    retry_time = _parse_daily_time(get_auto_refresh_retry_time())
     while True:
         now = datetime.now(timezone)
-        await asyncio.sleep(_seconds_until_next_daily_run(now, refresh_time))
+        scheduled, is_retry = _next_scheduled_refresh(now, refresh_time, retry_time)
+        await asyncio.sleep((scheduled - now).total_seconds())
+        if is_retry:
+            day_start = scheduled.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            ).astimezone(UTC)
+            if runtime.repository.has_successful_snapshot_since(
+                day_start.isoformat(timespec="seconds")
+            ):
+                continue
         if not runtime.lock.locked():
             await _run_refresh(runtime)
 
@@ -168,6 +182,25 @@ def _seconds_until_next_daily_run(now: datetime, refresh_time: datetime_time) ->
     if scheduled <= now:
         scheduled += timedelta(days=1)
     return (scheduled - now).total_seconds()
+
+
+def _next_scheduled_refresh(
+    now: datetime,
+    refresh_time: datetime_time,
+    retry_time: datetime_time,
+) -> tuple[datetime, bool]:
+    candidates: list[tuple[datetime, bool]] = []
+    for scheduled_time, is_retry in ((refresh_time, False), (retry_time, True)):
+        scheduled = now.replace(
+            hour=scheduled_time.hour,
+            minute=scheduled_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if scheduled <= now:
+            scheduled += timedelta(days=1)
+        candidates.append((scheduled, is_retry))
+    return min(candidates, key=lambda item: item[0])
 
 
 app = create_app()

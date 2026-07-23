@@ -169,6 +169,26 @@ def test_failed_snapshot_does_not_replace_latest(tmp_path) -> None:
     ]
 
 
+def test_successful_snapshot_since_uses_completion_time(tmp_path) -> None:
+    repo = Repository(tmp_path / "app.db")
+    repo.init_schema()
+    snapshot = repo.create_snapshot()
+    repo.save_successful_snapshot(
+        snapshot,
+        [project()],
+        [building()],
+        [house("1单元-101", "available")],
+    )
+    with repo.connect() as conn:
+        conn.execute(
+            "UPDATE snapshots SET completed_at=? WHERE id=?",
+            ("2026-07-23T01:07:00+00:00", snapshot),
+        )
+
+    assert repo.has_successful_snapshot_since("2026-07-23T00:00:00+00:00") is True
+    assert repo.has_successful_snapshot_since("2026-07-23T02:00:00+00:00") is False
+
+
 def test_blank_project_land_does_not_overwrite_existing_land(tmp_path) -> None:
     repo = Repository(tmp_path / "app.db")
     repo.init_schema()

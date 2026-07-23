@@ -48,5 +48,9 @@ def get_auto_refresh_time() -> str:
     return os.environ.get("AUTO_REFRESH_TIME", "09:00")
 
 
+def get_auto_refresh_retry_time() -> str:
+    return os.environ.get("AUTO_REFRESH_RETRY_TIME", "15:00")
+
+
 def get_auto_refresh_timezone() -> str:
     return os.environ.get("AUTO_REFRESH_TIMEZONE", "Asia/Shanghai")
